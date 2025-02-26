@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Chirp - Redirecting</title>
+  <script type="text/javascript">
+    // Handle SPA routing on GitHub Pages
+    const pathSegmentsToKeep = 1;
+    
+    const l = window.location;
+    const port = l.port ? ':' + l.port : '';
+    
+    // GitHub Pages adds the '/chirp' segment, which we need to account for
+    const redirectTo = l.protocol + '//' + l.hostname + port + '/chirp' + 
+        l.pathname.split('/').slice(pathSegmentsToKeep + 1).join('/') + 
+        (l.search ? l.search : '');
+    
+    window.location.replace(redirectTo);
+  </script>
+</head>
+<body>
+  Redirecting to main page...
+</body>
+</html> 
