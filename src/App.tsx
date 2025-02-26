@@ -266,7 +266,7 @@ function App() {
       }
     } catch (error) {
       console.error('Error in updateFrequencies:', error);
-      setDebugText(`Error: ${error.message}`);
+      setDebugText(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     
     // Continue the animation loop
@@ -370,7 +370,7 @@ function App() {
         animationFrameRef.current = requestAnimationFrame(updateFrequencies);
       } catch (micError) {
         console.error('Failed to access microphone:', micError);
-        setDebugText(`Microphone error: ${micError.message}. Switching to mock data.`);
+        setDebugText(`Microphone error: ${micError instanceof Error ? micError.message : 'Unknown error'}. Switching to mock data.`);
         
         // Switch to mock data mode when microphone fails
         setUseMockData(true);
@@ -382,7 +382,7 @@ function App() {
       
     } catch (error) {
       console.error('Error in startListening:', error);
-      setDebugText(`Error: ${error.message}. Try using mock data.`);
+      setDebugText(`Error: ${error instanceof Error ? error.message : 'Unknown error'}. Try using mock data.`);
     }
   };
   
@@ -487,7 +487,7 @@ function App() {
       setInputText('');
     } catch (error) {
       console.error('Error transmitting message:', error);
-      setDebugText(`Transmission error: ${error.message}`);
+      setDebugText(`Transmission error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsTransmitting(false);
     }
@@ -500,7 +500,7 @@ function App() {
       setDebugText('Audio initialized (click Start Listening to begin)');
     } catch (error) {
       console.error('Error initializing AudioContext:', error);
-      setDebugText(`Audio init error: ${error.message}`);
+      setDebugText(`Audio init error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
   

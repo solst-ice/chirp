@@ -49,7 +49,7 @@ const ensureAudioContextReady = async (audioContext: AudioContext): Promise<bool
     try {
       console.log('Resuming suspended AudioContext');
       await audioContext.resume();
-      return audioContext.state === 'running';
+      return audioContext.state !== 'suspended';
     } catch (error) {
       console.error('Failed to resume AudioContext:', error);
       return false;
