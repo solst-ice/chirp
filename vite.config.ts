@@ -10,6 +10,7 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  base: '/chirp/', // Set base path to repository name for GitHub Pages
   // Ensure we're using the correct entry point
   build: {
     rollupOptions: {
@@ -17,5 +18,7 @@ export default defineConfig({
         main: path.resolve(__dirname, 'index.html'),
       },
     },
+    outDir: 'dist',
+    sourcemap: true
   },
 }) 

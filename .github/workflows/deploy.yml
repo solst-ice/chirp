@@ -3,7 +3,10 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - main
+      - main  # Set this to your default branch
+
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -16,19 +19,27 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-          
+          cache: 'npm'
+
       - name: Install Dependencies
         run: npm ci
-        
+
       - name: Build
         run: npm run build
-        
-      - name: Add .nojekyll file
-        run: touch dist/.nojekyll
-        
+
+      - name: Create 404.html and .nojekyll
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          branch: gh-pages
           folder: dist
-          clean: true 
+          clean: true
+          branch: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+          git-config-name: github-actions[bot]
+          git-config-email: github-actions[bot]@users.noreply.github.com
+          commit-message: "Deploy website"
+          single-commit: true 
