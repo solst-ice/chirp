@@ -69,7 +69,7 @@ function App() {
     style.textContent = `
       @font-face {
         font-family: 'Unifont';
-        src: url('./unifont.woff') format('woff');
+        src: url('/unifont.woff') format('woff');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -77,7 +77,7 @@ function App() {
 
       /* Apply the font to the entire app */
       body, input, button, textarea {
-        font-family: 'Unifont', monospace;
+        font-family: 'Unifont', 'Courier Prime', 'Courier New', monospace;
       }
       
       /* Ensure the font is applied to all text elements in the app */

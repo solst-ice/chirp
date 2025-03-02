@@ -886,7 +886,7 @@ div.message-line.sent-message > span {
   max-height: 280px; /* Full height of the message container */
   overflow-y: auto;
   padding: 10px;
-  font-family: 'Unifont', monospace;
+  font-family: 'Unifont', 'Courier Prime', 'Courier New', monospace;
   width: 100%;
   border-top: none;
   margin-top: 0;
