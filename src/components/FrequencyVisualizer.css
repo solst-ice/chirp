@@ -1,0 +1,37 @@
+.frequency-visualizer {
+  position: relative;
+  width: 100%;
+  height: 175px;
+  overflow: hidden;
+  background-color: #000;
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  transition: all 0.3s ease;
+}
+
+.frequency-visualizer canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transition: box-shadow 0.3s ease;
+}
+
+/* Add a subtle glow effect for the transmission mode */
+.frequency-visualizer canvas.transmit-active {
+  box-shadow: 0 0 15px rgba(0, 255, 80, 0.3), 
+              inset 0 0 25px rgba(0, 255, 80, 0.2);
+  border: 1px solid rgba(0, 255, 120, 0.4);
+}
+
+/* Add a pulsing animation for the transmission active state */
+@keyframes transmitPulse {
+  0% { box-shadow: 0 0 15px rgba(0, 255, 80, 0.3), inset 0 0 25px rgba(0, 255, 80, 0.2); }
+  50% { box-shadow: 0 0 25px rgba(0, 255, 80, 0.5), inset 0 0 35px rgba(0, 255, 80, 0.3); }
+  100% { box-shadow: 0 0 15px rgba(0, 255, 80, 0.3), inset 0 0 25px rgba(0, 255, 80, 0.2); }
+}
+
+.frequency-visualizer canvas.transmit-active {
+  animation: transmitPulse 2s infinite ease-in-out;
+} 

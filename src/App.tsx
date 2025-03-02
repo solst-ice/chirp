@@ -1,10 +1,18 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import './App.css';
 import FrequencyVisualizer from './components/FrequencyVisualizer';
-import { encodeText, decodeAudio, resetDecoder } from './utils/audioCodec';
+import { 
+  encodeText, 
+  decodeAudio, 
+  resetDecoder, 
+  MAXIMUM_VALID_FREQUENCY 
+} from './utils/audioCodec';
 
 // Add a console log to confirm the component is loading
 console.log('Chirp system initializing');
+
+// Audio signal favicon SVG data - base64 encoded for direct use
+const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIGZpbGw9IiMxMzEzMTMiLz4KICA8IS0tIFRocmVlIHNpZ25hbCBiYXJzIHdpdGggc29saWQgY29sb3JzIC0tPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiByeD0iMiIgZmlsbD0iI2ZmNDFiNCIvPiA8IS0tIFBpbmsgLS0+CiAgPHJlY3QgeD0iMjciIHk9IjMwIiB3aWR0aD0iMTAiIGhlaWdodD0iMjIiIHJ4PSIyIiBmaWxsPSIjMDBmZmFhIi8+IDwhLS0gR3JlZW4gLS0+CiAgPHJlY3QgeD0iNDIiIHk9IjE4IiB3aWR0aD0iMTAiIGhlaWdodD0iMzQiIHJ4PSIyIiBmaWxsPSIjMzE4NWZmIi8+IDwhLS0gQmx1ZSAtLT4KPC9zdmc+`;
 
 function App() {
   const [inputText, setInputText] = useState('');
@@ -14,11 +22,15 @@ function App() {
   const [frequencies, setFrequencies] = useState<number[]>([]);
   const [debugText, setDebugText] = useState<string>('Initializing system...');
   const [debugMode, setDebugMode] = useState<boolean>(false);
+  const [transmitVisualization, setTransmitVisualization] = useState<boolean>(false);
   const [txStats, setTxStats] = useState<{
     charCount: number;
     duration: number;
     charsPerSecond: number;
   } | null>(null);
+  
+  // Add a state variable to track if initial message has been shown
+  const [initialMessageShown, setInitialMessageShown] = useState<boolean>(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -38,6 +50,122 @@ function App() {
   const [compatibilityMode, setCompatibilityMode] = useState<boolean>(true);
   const [sendTestMessages, setSendTestMessages] = useState<boolean>(false);
   const [systemInitialized, setSystemInitialized] = useState<boolean>(false);
+
+  // For managing streaming messages
+  const [isCurrentlyStreaming, setIsCurrentlyStreaming] = useState<boolean>(false);
+  const currentStreamingText = useRef<string>('');
+  
+  // Add this ref to track transmission state globally
+  const isActivelyTransmittingRef = useRef<boolean>(false);
+  
+  // Add a special ref just for sent messages that won't get overwritten
+  const sentMessagesContainerRef = useRef<HTMLDivElement | null>(null);
+  
+  // Add useEffect to load the custom font stylesheet
+  useEffect(() => {
+    // Create a style element to add the @font-face declaration
+    const style = document.createElement('style');
+    style.textContent = `
+      @font-face {
+        font-family: 'Unifont';
+        src: url('./unifont.woff') format('woff');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      /* Apply the font to the entire app */
+      body, input, button, textarea {
+        font-family: 'Unifont', monospace;
+      }
+      
+      /* Ensure the font is applied to all text elements in the app */
+      .app-container,
+      .title-container,
+      .section-title,
+      .controls button,
+      .debug-container,
+      .debug-info,
+      .floating-stats-container,
+      .status-indicator,
+      .visualizer-container,
+      .message-container,
+      .transmit-container,
+      .app-footer,
+      
+      /* Message display elements */
+      .received-message,
+      .received-message *,
+      .message-line,
+      .streaming-message,
+      .timestamp,
+      .message-separator,
+      .sent-message,
+      .timeout-message,
+      .terminal-cursor {
+        font-family: 'Unifont', monospace;
+      }
+      
+      /* Direct style for dynamically inserted content */
+      div[data-testid="message-display"] {
+        font-family: 'Unifont', monospace !important;
+      }
+      
+      /* Force the font on all elements as a fallback */
+      * {
+        font-family: 'Unifont', monospace;
+      }
+      
+      /* HIGHEST PRIORITY SENT MESSAGE STYLING */
+      .sent-message,
+      [data-sent="true"],
+      [class*="sent-indicator"],
+      .sent-text,
+      div:has([class*="sent-indicator"]),
+      div:has(.sent-text) {
+        color: var(--terminal-green) !important;
+        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+      }
+      
+      /* Target specific elements with inline style */
+      .message-line.sent-message,
+      .message-line.sent-message *,
+      .message-line[data-sent="true"],
+      .message-line[data-sent="true"] * {
+        color: var(--terminal-green) !important;
+      }
+    `;
+    document.head.appendChild(style);
+    
+    console.log('Custom Unifont font loaded and applied app-wide');
+    
+    // Add a second style element with absolute highest priority
+    const sentStyle = document.createElement('style');
+    sentStyle.setAttribute('id', 'sent-message-styles');
+    sentStyle.textContent = `
+      /* Inline styles for maximum specificity */
+      .sent-message,
+      [data-sent="true"],
+      [class*="sent-indicator"],
+      .sent-text,
+      div:has([class*="sent-indicator"]),
+      div:has(.sent-text) {
+        color: var(--terminal-green) !important;
+        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+      }
+      
+      /* Target specific elements with inline style */
+      .message-line.sent-message,
+      .message-line.sent-message *,
+      .message-line[data-sent="true"],
+      .message-line[data-sent="true"] * {
+        color: var(--terminal-green) !important;
+      }
+    `;
+    document.head.appendChild(sentStyle);
+    
+    console.log('Added highest-priority sent message styles directly to document head');
+  }, []);
 
   // Function to initialize or resume audio context - don't create until needed
   const getAudioContext = async () => {
@@ -98,11 +226,59 @@ function App() {
     }
   }, [isListening]);
   
+  /**
+   * Format a message with timestamp and appropriate styling
+   */
+  const formatMessage = (message: string, type: string): string => {
+    const timestamp = new Date().toLocaleTimeString();
+    
+    // Add the appropriate class based on message type
+    let className = '';
+    
+    if (type === 'sent') {
+      className = 'sent-message';
+    } else if (type === 'streaming') {
+      className = 'streaming-message';
+      // MODIFIED: Allow special characters in streaming messages
+      // Only filter out control characters
+      message = message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+    } else if (type === 'timeout') {
+      className = 'timeout-message';
+    } else {
+      className = 'received-message';
+    }
+    
+    // Special handling for sent messages to ensure consistency
+    if (message.includes("[SENT]")) {
+      const timestamp = message.match(/\[\d{2}:\d{2}:\d{2}\]/);
+      let cleanMessage = message;
+      
+      if (timestamp) {
+        // Extract the part after [SENT]
+        const sentParts = message.split("[SENT]");
+        if (sentParts.length > 1) {
+          const messageContent = sentParts[1].trim();
+          // Create a simpler format with direct styling
+          cleanMessage = `<div class="sent-message-direct" style="color: #00ff41; border-left: 4px solid #00ff41; background-color: rgba(0, 20, 0, 0.4); padding-left: 8px;">${timestamp[0]} <strong class="sent-indicator" style="color: #00ff41;">[SENT]</strong> ${messageContent}</div>`;
+          
+          console.log("Using ultra-simplified sent message format:", cleanMessage);
+          return cleanMessage;
+        }
+      }
+    }
+    
+    // Format with timestamp on a new line
+    return `<div class="${className}">
+      <div>${message}</div>
+      <div class="timestamp">${timestamp}</div>
+    </div>`;
+  };
+
   // Function to directly update UI with a received message
-  const addReceivedMessage = (message: string) => {
+  const addReceivedMessage = (message: string, isStreamingMessage = false) => {
     // Only log actual messages, not empty ones
     if (message.trim()) {
-      console.log('Message received for display:', message);
+      console.log('Message received for display:', message, isStreamingMessage ? '(streaming)' : '');
     }
     
     // Create timestamp with current time
@@ -112,17 +288,69 @@ function App() {
     // Log timestamp for debugging
     console.log(`Adding timestamp [${timestamp}] to message`);
     
+    // Check if this is a sent message
+    const isSentMessage = message.includes('[SENT]');
+    
+    // For sent messages, use a completely separate DOM element that won't get overwritten
+    if (isSentMessage && sentMessagesContainerRef.current) {
+      console.log('Adding message to SENT messages container to prevent overwriting');
+      
+      // Create a div for the sent message with inline styles
+      const sentMessageDiv = document.createElement('div');
+      sentMessageDiv.classList.add('message-line', 'sent-message');
+      sentMessageDiv.setAttribute('data-sent', 'true');
+      sentMessageDiv.setAttribute('data-permanent-sent', 'true');
+      
+      // Apply all styles inline for maximum resilience
+      sentMessageDiv.style.color = '#00ff41';
+      sentMessageDiv.style.fontWeight = 'bold';
+      sentMessageDiv.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
+      sentMessageDiv.style.borderLeft = '4px solid #00ff41';
+      sentMessageDiv.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
+      sentMessageDiv.style.marginBottom = '8px';
+      sentMessageDiv.style.padding = '4px 8px';
+      
+      // Extract the message content after [SENT]
+      let cleanMessage = message;
+      if (message.startsWith('[SENT]:')) {
+        cleanMessage = message.replace('[SENT]:', '').trim();
+      } else if (message.startsWith('[SENT]')) {
+        cleanMessage = message.replace('[SENT]', '').trim();
+      }
+      
+      // Create content with green color applied to every element
+      sentMessageDiv.innerHTML = `<span style="color: #00ff41;">[${timestamp}] <strong class="sent-indicator" style="color: #00ff41; font-weight: bold;">[SENT]</strong> <span class="sent-text" style="color: #00ff41;">${cleanMessage}</span></span>`;
+      
+      // Insert at the top of the sent messages container
+      if (sentMessagesContainerRef.current.firstChild) {
+        sentMessagesContainerRef.current.insertBefore(sentMessageDiv, sentMessagesContainerRef.current.firstChild);
+      } else {
+        sentMessagesContainerRef.current.appendChild(sentMessageDiv);
+      }
+      
+      console.log('Added sent message to isolated container', sentMessageDiv);
+      
+      // Skip the normal message flow for sent messages
+      return;
+    }
+    
     // Always create a consistent format with visible timestamp
     let formattedMessage = '';
     
-    // Handle sent messages with special formatting
-    if (message.startsWith('[SENT]') || message.startsWith('[SENT]:')) {
-      // Clean up sent message format
-      const cleanMessage = message.replace('[SENT]:', '[SENT]').trim();
-      formattedMessage = `<div class="message-line"><span class="timestamp">[${timestamp}]</span> ${cleanMessage}</div>`;
-    } else {
-      // Standard message format
-      formattedMessage = `<div class="message-line"><span class="timestamp">[${timestamp}]</span> ${message}</div>`;
+    // Handle streaming message - use a special class for in-progress messages
+    if (isStreamingMessage) {
+      // FIXED: Allow special characters in streaming messages by only filtering control chars
+      const cleanedMessage = message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+      formattedMessage = `<div class="message-line streaming-message">[${timestamp}] ${cleanedMessage}<span class="terminal-cursor">_</span></div>`;
+    } 
+    // Handle timeout messages with special formatting
+    else if (message.includes("(timeout)")) {
+      // Highlight timeout messages differently
+      formattedMessage = `<div class="message-line timeout-message">[${timestamp}] ${message}</div>`;
+    }
+    // Standard message format
+    else {
+      formattedMessage = `<div class="message-line">[${timestamp}] ${message}</div>`;
     }
     
     // Log the HTML being inserted
@@ -130,29 +358,68 @@ function App() {
     
     // Direct DOM update - much more reliable than React state for this case
     if (messageDisplayRef.current) {
+      console.log('messageDisplayRef is valid, updating DOM');
+      
+      // Handle streaming updates differently
+      if (isStreamingMessage) {
+        // If there's an existing streaming message, update it instead of adding a new one
+        const existingStreamingMessage = messageDisplayRef.current.querySelector('.streaming-message');
+        if (existingStreamingMessage) {
+          console.log('Updating existing streaming message');
+          // Strip the wrapping div but preserve the newline
+          existingStreamingMessage.innerHTML = formattedMessage.replace('<div class="message-line streaming-message">', '').replace('</div>', '');
+          
+          // Force DOM refresh by triggering a reflow
+          const forceReflow = messageDisplayRef.current.offsetHeight;
+          
+          // Set scrollTop to 0 to ensure the newest messages are visible
+          messageDisplayRef.current.scrollTop = 0;
+          return; // Don't add a new message line
+        }
+      }
+      
       // Clear placeholder text if this is the first message
       if (messageDisplayRef.current.innerText === 'No messages received yet.' || 
-          messageDisplayRef.current.innerText === 'NO INCOMING TRANSMISSION DETECTED...\n_ ') {
+          messageDisplayRef.current.innerText === 'NO INCOMING TRANSMISSION DETECTED...\n_ ' ||
+          messageDisplayRef.current.innerHTML.trim() === '') {
+        console.log('Clearing placeholder text');
         messageDisplayRef.current.innerHTML = formattedMessage;
       } else {
-        // Add new message at the top
+        // Add the new message to the top
         messageDisplayRef.current.innerHTML = formattedMessage + messageDisplayRef.current.innerHTML;
       }
       
-      // Make clear button visible
+      // Make clear button visible if it exists
       const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
       if (clearButton) clearButton.style.display = 'block';
+      
+      // Force DOM refresh by triggering a reflow
+      const forceReflow = messageDisplayRef.current.offsetHeight;
+      
+      // Always scroll to top after adding a new message
+      messageDisplayRef.current.scrollTop = 0;
     } else {
       console.warn('messageDisplayRef.current is null - cannot update DOM directly');
     }
     
-    // Update React state as a backup
+    // Skip React state update for sent messages
+    if (isSentMessage) {
+      console.log('Skipping React state update for [SENT] message to prevent style overrides');
+      return;
+    }
+    
+    // For non-SENT messages, update React state as a backup 
     setReceivedMessage(prevMessage => {
-      const newMessage = `[${timestamp}] ${message}\n${prevMessage || ''}`;
-      // Force a UI refresh
-      setTimeout(() => setForceUpdate(prev => prev + 1), 50);
+      // Just use plain text for the React state without HTML tags
+      // Add a definite newline between messages
+      const newMessage = `[${timestamp}] ${message}\n\n${prevMessage || ''}`;
+      // Force a UI refresh immediately
+      setTimeout(() => setForceUpdate(prev => prev + 1), 10);
       return newMessage;
     });
+    
+    // Update ref tracking for the last received message
+    lastReceivedTextRef.current = message;
   };
   
   // Generate mock frequency data for testing
@@ -181,6 +448,50 @@ function App() {
   const updateFrequencies = () => {
     // Use ref for checking listening state to avoid closure issues
     if (!isListeningRef.current) {
+      return;
+    }
+    
+    // Skip audio processing while transmitting to avoid conflicts
+    if (isTransmitting || isActivelyTransmittingRef.current) {
+      // Just update the visualizer and continue the animation frame
+      if (useMockData) {
+        const mockData = generateMockFrequencyData();
+        setFrequencies(mockData);
+      } else if (analyserRef.current && audioContextRef.current) {
+        // If we have analyzer access, still update the visualizer with real data
+        const bufferLength = analyserRef.current.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        // Get frequency data
+        analyserRef.current.getByteFrequencyData(dataArray);
+        
+        // Calculate the frequency range to show
+        const nyquistFrequency = audioContextRef.current.sampleRate / 2;
+        const maxBinToShow = Math.ceil((MAXIMUM_VALID_FREQUENCY / nyquistFrequency) * (dataArray.length));
+        const minBinToShow = 15; // Skip lowest frequencies
+        
+        // Get raw frequency data
+        const fullFrequencyRange = Array.from(dataArray.slice(minBinToShow, maxBinToShow));
+        
+        // Apply the same enhancement to transmit mode visualization
+        const enhancedFrequencies = [];
+        for (let i = 0; i < fullFrequencyRange.length; i++) {
+          const normalizedPosition = i / fullFrequencyRange.length;
+          let value = fullFrequencyRange[i];
+          
+          // Boost mid-range frequencies
+          if (normalizedPosition > 0.15 && normalizedPosition < 0.7) {
+            value = Math.min(255, value * 1.3); // Boost mid-range by 30%
+          }
+          
+          enhancedFrequencies.push(value);
+        }
+        
+        setFrequencies(enhancedFrequencies);
+      }
+      
+      // Continue the animation loop without attempting to decode audio
+      animationFrameRef.current = requestAnimationFrame(updateFrequencies);
       return;
     }
     
@@ -238,31 +549,175 @@ function App() {
       }
       debugMsgCountRef.current++;
 
-      // IMPROVED: Directly extract useful frequency range and normalize
-      // Take a more focused range that's likely to contain our data
-      const usefulDataRange = Array.from(dataArray.slice(10, 150)); 
+      // IMPROVED: Calculate frequency range to display fully up to MAXIMUM_VALID_FREQUENCY
+      // Find the right slice of frequency bins to display up to our maximum frequency
+      const nyquistFrequency = audioContextRef.current.sampleRate / 2; // Maximum representable frequency
+      const maxValidFrequency = MAXIMUM_VALID_FREQUENCY; // From MAXIMUM_VALID_FREQUENCY in audioCodec.ts
+      const maxBinToShow = Math.ceil((maxValidFrequency / nyquistFrequency) * (dataArray.length));
       
-      // Always update frequencies - performance is fine with modern browsers
-      setFrequencies(usefulDataRange);
+      // Skip very low frequencies (first 10-20 bins) that are often just noise
+      const minBinToShow = 15; // Skip first 15 bins of very low frequencies to focus on useful range
       
+      // Compress the high-frequency bins to emphasize the important mid-range frequencies
+      // This makes the visualization more useful by focusing on the most relevant frequencies
+      const compressedFrequencies = [];
+      
+      // Take raw data for lower frequencies (more important for our character detection)
+      const fullFrequencyRange = Array.from(dataArray.slice(minBinToShow, maxBinToShow));
+      
+      // Apply a simple exponential scale transformation to emphasize midrange frequencies
+      // This helps make the bars more visible and useful for the expanded frequency range
+      for (let i = 0; i < fullFrequencyRange.length; i++) {
+        const normalizedPosition = i / fullFrequencyRange.length;
+        // Apply a non-linear scaling to emphasize middle frequencies
+        let value = fullFrequencyRange[i];
+        
+        // Boost mid-range frequencies (where most characters are)
+        if (normalizedPosition > 0.15 && normalizedPosition < 0.7) {
+          value = Math.min(255, value * 1.3); // Boost mid-range by 30%
+        }
+        
+        compressedFrequencies.push(value);
+      }
+      
+      // Always update frequencies with our optimized data
+      setFrequencies(compressedFrequencies);
+
       // Force update on UI regardless
       if (debugMsgCountRef.current % 30 === 0) {
         setForceUpdate(prev => prev + 1);
       }
       
-      // Try to decode any message - make sure this call is working
-      try {
-        const decodedText = decodeAudio(dataArray, audioContextRef.current.sampleRate);
-        
-        // Only add new text if it's not null
-        if (decodedText && decodedText.trim() !== '') {
-          setDebugText(`Decoded: "${decodedText}"`);
+      // CRITICAL CHECK: Do not attempt to decode audio if transmitting
+      if (isTransmitting || isActivelyTransmittingRef.current) {
+        // Skip all audio decoding when transmitting
+        animationFrameRef.current = requestAnimationFrame(updateFrequencies);
+        return;
+      }
+      
+      // Only try to decode if we're not transmitting (redundant check for safety)
+      if (!isTransmitting && !isActivelyTransmittingRef.current) {
+        // Try to decode any message - make sure this call is working
+        try {
+          const decodedText = decodeAudio(dataArray, audioContextRef.current.sampleRate);
           
-          // DIRECT ADD: Immediately add to messages
-          addReceivedMessage(decodedText);
+          // Handle decoded text if we got something back
+          if (decodedText) {
+            console.log("Decode audio returned:", decodedText);
+            
+            // Handle streaming start marker
+            if (decodedText === "[STREAM_START]" && !isTransmitting && !isActivelyTransmittingRef.current) {
+              console.log("Beginning streaming message...");
+              setIsCurrentlyStreaming(true);
+              currentStreamingText.current = '';
+              
+              // Update UI to show we're receiving - use comprehensive check
+              const statusIndicator = document.querySelector('.status-indicator');
+              if (statusIndicator && !isTransmitting && !isActivelyTransmittingRef.current) {
+                // Add console logging to help debug the issue
+                console.log("Setting status to RECEIVING TRANSMISSION");
+                statusIndicator.textContent = "RECEIVING TRANSMISSION";
+                statusIndicator.classList.add('streaming');
+              }
+              
+              setDebugText("Receiving transmission...");
+            }
+            // Handle streaming content
+            else if (decodedText && decodedText.startsWith("[STREAM]") && isCurrentlyStreaming && !isTransmitting && !isActivelyTransmittingRef.current) {
+              const newChars = decodedText.substring(8);
+              
+              // MODIFIED: Accept all printable characters including special characters
+              // Only filter out control characters and truly non-printable characters
+              const filteredChars = newChars.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+              
+              if (filteredChars.length > 0) {
+                currentStreamingText.current += filteredChars;
+                console.log("Streaming chars:", filteredChars, "Current buffer:", currentStreamingText.current);
+                
+                // Always update the UI immediately when we get characters
+                addReceivedMessage("RECEIVING: " + currentStreamingText.current, true);
+                setDebugText(`Streaming: ${currentStreamingText.current}`);
+                
+                // Force render update immediately
+                setForceUpdate(prev => prev + 1);
+              }
+            }
+            // Handle streaming end - may also contain the full validated message
+            else if (decodedText.startsWith("[STREAM_END]") && !isTransmitting && !isActivelyTransmittingRef.current) {
+              console.log("End of streaming message");
+              setIsCurrentlyStreaming(false);
+              
+              // Reset the status indicator
+              const statusIndicator = document.querySelector('.status-indicator');
+              if (statusIndicator && !isTransmitting && !isActivelyTransmittingRef.current) {
+                statusIndicator.textContent = "RECEIVING";
+                statusIndicator.classList.remove('streaming');
+              }
+              
+              // Handle timeout case specifically
+              if (decodedText.includes("(timeout)")) {
+                console.log("Transmission timed out");
+                
+                // Extract any partial message after "[STREAM_END] " and before " (timeout)"
+                const timeoutIndex = decodedText.indexOf("(timeout)");
+                let finalMessage = "TRANSMISSION TIMEOUT";
+                
+                // If we have content before the timeout message, extract it
+                if (timeoutIndex > 12) { // "[STREAM_END] " is 12 chars
+                  const partialContent = decodedText.substring(12, timeoutIndex).trim();
+                  if (partialContent) {
+                    // MODIFIED: Allow special characters in timeout messages
+                    const sanitizedMessage = partialContent.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+                    if (sanitizedMessage) {
+                      finalMessage = "RECEIVED (TIMEOUT): " + sanitizedMessage;
+                      
+                      // Try to make an educated guess about what was being sent
+                      if (sanitizedMessage.includes("T") || 
+                          sanitizedMessage.includes("E") || 
+                          sanitizedMessage.includes("S")) {
+                        console.log("Message appears to be a TEST message");
+                        // Add a hint for the user in debug mode
+                        if (debugMode) {
+                          setDebugText(`Partial TEST message received: ${sanitizedMessage} - likely "TEST123"`);
+                        }
+                      }
+                    }
+                  }
+                }
+                addReceivedMessage(finalMessage);
+                setDebugText(`Transmission timed out: ${finalMessage}`);
+              }
+              // Check if we have a validated message
+              else if (decodedText.length > 12) { // "[STREAM_END] " is 12 chars
+                const finalMessage = decodedText.substring(12);
+                // MODIFIED: Allow special characters in received messages
+                const sanitizedMessage = finalMessage.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+                addReceivedMessage(sanitizedMessage);
+                setDebugText(`Decoded: "${sanitizedMessage}"`);
+              } else {
+                // No validated message, just end the streaming
+                const finalStreamContent = currentStreamingText.current;
+                // Only add a message if we have streamed content
+                if (finalStreamContent) {
+                  addReceivedMessage("RECEIVED: " + finalStreamContent);
+                }
+                setDebugText("Transmission ended");
+              }
+              currentStreamingText.current = '';
+            }
+            // Handle normal message (not a streaming one)
+            else if (!decodedText.startsWith("[STREAM]") && decodedText.trim() !== '' && !isTransmitting && !isActivelyTransmittingRef.current) {
+              // MODIFIED: Allow special characters in normal messages
+              const sanitizedMessage = decodedText.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+              if (sanitizedMessage.trim() !== '') {
+                setDebugText(`Decoded: "${sanitizedMessage}"`);
+                addReceivedMessage(sanitizedMessage);
+              }
+            }
+          }
+        } catch (decodeError) {
+          console.error('Error in decodeAudio:', decodeError);
         }
-      } catch (decodeError) {
-        console.error('Error in decodeAudio:', decodeError);
       }
     } catch (error) {
       console.error('Error in updateFrequencies:', error);
@@ -441,9 +896,34 @@ function App() {
   const transmitMessage = async () => {
     if (!inputText || isTransmitting) return;
     
+    // Set both the state and the ref
     setIsTransmitting(true);
+    isActivelyTransmittingRef.current = true;
+    
+    // Add logging to trace transmission state changes
+    console.log('TRANSMISSION STARTED - Blocking all receiving modes');
+    
     setDebugText(`Transmitting: "${inputText}"`);
     console.log('Transmitting:', inputText);
+    
+    // Instead of pausing receiving, change visualization to green mode
+    setTransmitVisualization(true);
+    let wasListening = false;
+    
+    // We no longer cancel the animation frame, just track if we were listening
+    if (animationFrameRef.current) {
+      console.log('Switching to transmission visualization mode');
+      wasListening = true;
+      // Don't cancel the animation frame, keep visualization running with green colors
+    }
+    
+    // Update status indicator to show "TRANSMITTING" only
+    const statusIndicator = document.querySelector('.status-indicator');
+    if (statusIndicator) {
+      statusIndicator.textContent = "TRANSMITTING";
+      statusIndicator.classList.add('transmitting');
+      statusIndicator.classList.remove('streaming'); // Make sure streaming class is removed
+    }
     
     try {
       // Record start time for statistics
@@ -476,11 +956,15 @@ function App() {
       setDebugText(`Transmission complete: ${charCount} chars in ${duration.toFixed(2)}s`);
       console.log(`Transmission complete: ${charCount} chars at ${charsPerSecond.toFixed(2)} chars/s`);
       
-      // IMPORTANT: Always add a consistent format for sent messages
-      // This needs to be inside the timeout to allow for processing
+      // UPDATED: Add sent message directly to the sent messages container
       setTimeout(() => {
-        // Force exact format - don't vary between tests
-        addReceivedMessage(`[SENT] ${inputText}`);
+        // Create our sent message in standard format
+        const sentMessage = `[SENT] ${inputText}`;
+        
+        // Use our improved function to add it directly to the separate container
+        addReceivedMessage(sentMessage);
+        
+        console.log('Added message with [SENT] prefix to separate container:', sentMessage);
       }, 300);
       
       // Clear the input after successful transmission
@@ -489,7 +973,28 @@ function App() {
       console.error('Error transmitting message:', error);
       setDebugText(`Transmission error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
+      // Set both the state and the ref
       setIsTransmitting(false);
+      isActivelyTransmittingRef.current = false;
+      
+      // Add logging to trace transmission state changes
+      console.log('TRANSMISSION ENDED - Allowing receiving modes again');
+      
+      // Turn off green visualization mode
+      setTransmitVisualization(false);
+      
+      // Reset status indicator after transmission is complete
+      const statusIndicator = document.querySelector('.status-indicator');
+      if (statusIndicator) {
+        statusIndicator.textContent = "STANDBY";
+        statusIndicator.classList.remove('transmitting');
+      }
+      
+      // We don't need to resume the animation frame since we kept it running
+      // Just log that we're back to normal mode
+      if (wasListening && isListeningRef.current) {
+        console.log('Returning to normal visualization mode after transmission');
+      }
     }
   };
 
@@ -498,6 +1003,12 @@ function App() {
     try {
       await getAudioContext();
       setDebugText('Audio initialized (click Start Listening to begin)');
+      
+      // Show initial "RECEIVING DATA..." message only if it hasn't been shown already
+      if (!initialMessageShown && messageDisplayRef.current) {
+        addReceivedMessage("RECEIVING DATA...", true);
+        setInitialMessageShown(true);
+      }
     } catch (error) {
       console.error('Error initializing AudioContext:', error);
       setDebugText(`Audio init error: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -513,11 +1024,16 @@ function App() {
     // Direct DOM update
     if (messageDisplayRef.current) {
       messageDisplayRef.current.innerHTML = ''; // Use empty string to trigger the :empty pseudo-selector
-      
-      // Hide the clear button
-      const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
-      if (clearButton) clearButton.style.display = 'none';
     }
+    
+    // Also clear sent messages container
+    if (sentMessagesContainerRef.current) {
+      sentMessagesContainerRef.current.innerHTML = '';
+    }
+    
+    // Hide the clear button
+    const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
+    if (clearButton) clearButton.style.display = 'none';
     
     setDebugText('Messages cleared');
   };
@@ -541,6 +1057,277 @@ function App() {
     }, 1000);
     
     return () => clearTimeout(initTimeout);
+  }, []);
+  
+  // Ensure messageDisplayRef is correctly initialized in useEffect
+  useEffect(() => {
+    // Log when the ref is connected to ensure it's properly set up
+    if (messageDisplayRef.current) {
+      console.log('Message display ref initialized correctly');
+    } else {
+      console.warn('Message display ref is not connected to DOM element');
+    }
+  }, []);
+  
+  // Add useEffect to set the favicon when component mounts
+  useEffect(() => {
+    // Create or select the favicon link element
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    
+    // Set the href to our audio wave SVG
+    link.href = AUDIO_FAVICON;
+    
+    // Also set apple-touch-icon for iOS devices
+    let appleLink = document.querySelector("link[rel~='apple-touch-icon']") as HTMLLinkElement;
+    if (!appleLink) {
+      appleLink = document.createElement('link');
+      appleLink.rel = 'apple-touch-icon';
+      document.head.appendChild(appleLink);
+    }
+    appleLink.href = AUDIO_FAVICON;
+    
+    console.log('Audio favicon set');
+  }, []);
+  
+  // Add a specific useEffect to inject a style element that will override all other rules
+  useEffect(() => {
+    // Create a style element with the highest priority CSS rules
+    const styleElement = document.createElement('style');
+    styleElement.setAttribute('id', 'sent-message-override-styles');
+    styleElement.textContent = `
+      /* Direct override for any text matching the [SENT] pattern */
+      div:has-text("[SENT]"),
+      div:contains("[SENT]"),
+      div[data-sent="true"],
+      div.sent-message,
+      .message-line:has-text("[SENT]") {
+        color: #00ff41 !important;
+        font-weight: bold !important;
+        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+        border-left: 4px solid #00ff41 !important;
+        background-color: rgba(0, 20, 0, 0.4) !important;
+      }
+      
+      /* Force all child elements to have the same color */
+      div:has-text("[SENT]") *,
+      div:contains("[SENT]") *,
+      div[data-sent="true"] *,
+      div.sent-message *,
+      .message-line:has-text("[SENT]") * {
+        color: #00ff41 !important;
+      }
+      
+      /* Target exact pattern format with timestamp */
+      div:has-text(/\\[\\d{2}:\\d{2}:\\d{2}\\] \\[SENT\\]/),
+      div:contains(/\\[\\d{2}:\\d{2}:\\d{2}\\] \\[SENT\\]/) {
+        color: #00ff41 !important;
+      }
+    `;
+    document.head.appendChild(styleElement);
+    
+    // Set up a MutationObserver to watch for DOM changes and apply styling to new [SENT] messages
+    const handleMutation = (mutations: MutationRecord[]) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node: Node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              // Check if this element or any of its children contains [SENT]
+              if ((node as Element).textContent?.includes('[SENT]')) {
+                const element = node as HTMLElement;
+                if (element) {
+                  element.style.color = '#00ff41';
+                  element.style.fontWeight = 'bold';
+                  element.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
+                  element.style.borderLeft = '4px solid #00ff41';
+                  element.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
+                  element.classList.add('sent-message');
+                }
+                
+                // Apply to all child nodes
+                (node as Element).querySelectorAll('*').forEach((child: Element) => {
+                  const childElement = child as HTMLElement;
+                  if (childElement) {
+                    childElement.style.color = '#00ff41';
+                  }
+                });
+              }
+            }
+          });
+        }
+      }
+    };
+    
+    // Create and start the observer if we have a valid message display ref
+    if (messageDisplayRef.current) {
+      const observer = new MutationObserver(handleMutation);
+      observer.observe(messageDisplayRef.current, { 
+        childList: true, 
+        subtree: true,
+        characterData: true,
+        attributes: true
+      });
+      
+      // Make sure to clean up
+      return () => {
+        observer.disconnect();
+        if (styleElement.parentNode) {
+          styleElement.parentNode.removeChild(styleElement);
+        }
+      };
+    }
+  }, []);
+  
+  useEffect(() => {
+    // Create a style element for direct styling
+    const styleElement = document.createElement('style');
+    styleElement.innerHTML = `
+      /* Direct node targeting styles */
+      .sent-message-direct {
+        color: #00ff41 !important;
+        font-weight: bold !important;
+        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+        border-left: 4px solid #00ff41 !important;
+        background-color: rgba(0, 20, 0, 0.4) !important;
+        padding-left: 8px !important;
+      }
+    `;
+    document.head.appendChild(styleElement);
+
+    // Function to process nodes
+    function processSentMessages() {
+      // Get the message display element
+      const messageDisplay = document.querySelector('[data-testid="message-display"]') || 
+                             document.querySelector('.received-message');
+      
+      if (!messageDisplay) return;
+      
+      // Get all text nodes in the message display
+      const textNodes: Text[] = [];
+      const walk = document.createTreeWalker(
+        messageDisplay, 
+        NodeFilter.SHOW_TEXT
+      );
+      
+      let node: Node | null;
+      while (node = walk.nextNode()) {
+        textNodes.push(node as Text);
+      }
+      
+      // Process each text node
+      textNodes.forEach(textNode => {
+        if (textNode.textContent && textNode.textContent.includes("[SENT]")) {
+          // Get the parent element of the text node
+          const element = textNode.parentElement;
+          
+          // If it's null or already styled, skip it
+          if (!element || element.classList.contains('sent-message-direct')) return;
+          
+          // Apply styling directly
+          element.classList.add('sent-message-direct');
+          
+          // Also apply to all child elements
+          const children = element.querySelectorAll('*');
+          children.forEach(child => {
+            if (child instanceof HTMLElement) {
+              child.classList.add('sent-message-direct');
+              child.style.color = '#00ff41';
+            }
+          });
+        }
+      });
+    }
+
+    // Set up MutationObserver to watch for changes
+    const observer = new MutationObserver(() => {
+      processSentMessages();
+    });
+
+    // Start observing
+    const messageDisplay = document.querySelector('[data-testid="message-display"]') || 
+                           document.querySelector('.received-message');
+    
+    if (messageDisplay) {
+      observer.observe(messageDisplay, { 
+        childList: true, 
+        subtree: true,
+        characterData: true 
+      });
+      
+      // Process existing messages
+      processSentMessages();
+    }
+
+    return () => {
+      observer.disconnect();
+      document.head.removeChild(styleElement);
+    };
+  }, []);
+  
+  // Add a new useEffect to ensure [SENT] messages stay colored by manually re-applying styles
+  useEffect(() => {
+    // Function to ensure all sent messages are green
+    const maintainSentMessageStyles = () => {
+      // First look for messages with the data-permanent-sent attribute
+      if (messageDisplayRef.current) {
+        const sentMessages = messageDisplayRef.current.querySelectorAll('[data-permanent-sent="true"]');
+        sentMessages.forEach(element => {
+          if (element instanceof HTMLElement) {
+            // Re-apply all the necessary styles
+            element.style.color = '#00ff41';
+            element.style.fontWeight = 'bold';
+            element.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
+            element.style.borderLeft = '4px solid #00ff41';
+            element.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
+            
+            // Apply styles to all child elements
+            const children = element.querySelectorAll('*');
+            children.forEach(child => {
+              if (child instanceof HTMLElement) {
+                child.style.color = '#00ff41';
+              }
+            });
+          }
+        });
+        
+        // Next, look for any content with [SENT] text
+        const allMessageLines = messageDisplayRef.current.querySelectorAll('.message-line');
+        allMessageLines.forEach(line => {
+          if (line.textContent && line.textContent.includes('[SENT]')) {
+            if (line instanceof HTMLElement) {
+              // Apply styles to this element if it contains [SENT]
+              line.style.color = '#00ff41';
+              line.style.fontWeight = 'bold';
+              line.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
+              line.style.borderLeft = '4px solid #00ff41';
+              line.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
+              line.setAttribute('data-permanent-sent', 'true');
+              
+              // Apply styles to all child elements
+              const children = line.querySelectorAll('*');
+              children.forEach(child => {
+                if (child instanceof HTMLElement) {
+                  child.style.color = '#00ff41';
+                }
+              });
+            }
+          }
+        });
+      }
+    };
+    
+    // Run immediately
+    maintainSentMessageStyles();
+    
+    // Set up an interval to periodically check and maintain sent message styles
+    const styleInterval = setInterval(maintainSentMessageStyles, 500);
+    
+    // Clean up the interval on unmount
+    return () => clearInterval(styleInterval);
   }, []);
   
   return (
@@ -633,6 +1420,7 @@ function App() {
         <FrequencyVisualizer 
           frequencies={frequencies} 
           key={`viz-${forceUpdate % 10}`}
+          transmitMode={transmitVisualization} // Pass prop to indicate transmission visualization
         />
         {!isListening && !systemInitialized && (
           <div className="status-indicator">SYSTEM INITIALIZING<span className="terminal-cursor">_</span></div>
@@ -645,6 +1433,11 @@ function App() {
             <div className="stats-value">SPEED: {txStats.charsPerSecond.toFixed(1)} c/s</div>
           </div>
         )}
+        {debugMode && (
+          <div className="frequency-range-info">
+            RANGE: 0-{MAXIMUM_VALID_FREQUENCY}Hz | START: 2500Hz | END: 2700Hz | SPACE: 900Hz | SPECIAL: 1300-4600Hz | NUMBERS: 4700-5600Hz | UPPERCASE: 5700-8200Hz
+          </div>
+        )}
       </div>
       
       <div className="message-transmit-wrapper">
@@ -654,17 +1447,35 @@ function App() {
             className="received-message" 
             key={`msg-${forceUpdate}`}
             ref={messageDisplayRef}
+            data-testid="message-display" // Add test ID for easy DOM selection
           >
             {receivedMessage || 'NO INCOMING TRANSMISSION DETECTED...\n_ '}
           </div>
-          {isListening && <div className="status-indicator">RECEIVING<span className="terminal-cursor">_</span></div>}
+          
+          {/* Add a completely separate container for sent messages that won't be affected by React updates */}
+          <div 
+            className="sent-messages-container"
+            ref={sentMessagesContainerRef}
+            data-testid="sent-messages-container"
+            style={{ marginTop: '10px' }}
+          >
+            {/* Sent messages will be added here directly via DOM operations */}
+          </div>
+          
+          {isListening && <div className="status-indicator">STANDBY<span className="terminal-cursor">_</span></div>}
         </div>
         
         <div className="transmit-container">
           <div className="section-title">&gt; TRANSMIT</div>
           <textarea
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => setInputText(e.target.value.toUpperCase())}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && inputText.trim() && !isTransmitting) {
+                e.preventDefault();
+                transmitMessage();
+              }
+            }}
             placeholder="ENTER MESSAGE FOR TRANSMISSION..."
             disabled={isTransmitting}
           />

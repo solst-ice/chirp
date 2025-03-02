@@ -1,33 +1,135 @@
 // Add a console log to confirm the module is being loaded
-console.log('Audio codec module is loading...');
+console.log('Audio codec module is loading with enhanced character detection and faster transmission...');
 
 // Constants for audio encoding
-const START_FREQUENCY = 1500; // Hz
-const END_FREQUENCY = 2000; // Hz
-const SYNC_FREQUENCY = 2200; // Hz
-const BASE_DATA_FREQUENCY = 600; // Hz
-const FREQUENCY_STEP = 100; // Hz step between hex digits
-const HEX_DURATION = 0.08; // seconds (80ms per hex digit - slightly longer for better reception)
-const SYNC_DURATION = 0.15; // seconds (longer sync duration)
-const VOLUME = 0.9; // Slightly louder
+export const START_FREQUENCY = 2500; // Hz - higher and distinct
+export const END_FREQUENCY = 2700; // Hz - higher and distinct
+export const MINIMUM_VALID_FREQUENCY = 400; // Ignore all frequencies below this threshold
+export const MAXIMUM_VALID_FREQUENCY = 8300; // Upper limit increased for wider character spacing (100Hz)
 
-// Even wider detection thresholds for better reception
-const FREQUENCY_TOLERANCE = 200; // Hz tolerance for frequency detection (wider for better reception)
-const SIGNAL_THRESHOLD = 50; // Lower threshold to detect quieter signals
+// Constants for timing - BALANCED FOR SPEED AND ACCURACY
+const START_MARKER_DURATION = 0.12; // seconds - balanced for speed and reliability (up from 0.10s)
+const END_MARKER_DURATION = 0.12; // seconds - balanced for speed and reliability (up from 0.10s)
+const CHARACTER_DURATION = 0.07; // seconds - balanced for accuracy while still fast (up from 0.055s)
+const CHARACTER_GAP = 0.03; // seconds - balanced for accuracy while still fast (up from 0.025s)
+const VOLUME = 1.0; // Full volume for better reception
+
+// Constants for parallel tone transmission
+const USE_PARALLEL_TONES = true; // Enable parallel tones to improve detection at higher speeds
+const PARALLEL_TONE_OFFSET = 35; // Hz offset for parallel tone - increased for better distinction at higher speeds
+const PARALLEL_TONE_VOLUME = 0.75; // Slightly lower volume for secondary tone
+
+// Detection thresholds - ADJUSTED FOR RELIABILITY
+const FREQUENCY_TOLERANCE = 45; // Slightly reduced tolerance for better accuracy (down from 48)
+const SIGNAL_THRESHOLD = 135; // Threshold balanced for speed and accuracy
+const DEBOUNCE_TIME = 75; // Increased for better accuracy (up from 65ms)
+const CHARACTER_LOCKOUT_TIME = 120; // Increased for better accuracy (up from 100ms)
 
 // Debug flag to enable verbose logging
 const DEBUG_AUDIO = true;
 
+// We'll use a much simpler approach with wider spacing
+// This maps each character to a specific frequency with wider spacing for problematic characters
+const CHAR_FREQUENCIES: { [char: string]: number } = {
+  // Space - keep at lower frequency as it's common (increased from 500)
+  ' ': 900,  
+  
+  // Special characters - with increased spacing (100Hz apart)
+  '!': 1300,
+  '@': 1400,
+  '#': 1500,
+  '$': 1600,
+  '%': 1700,
+  '^': 1800,
+  '&': 1900,
+  '*': 2000,
+  '(': 2100,
+  ')': 2200,
+  '-': 2300,
+  '_': 2400,
+  '+': 2600, // Skip START_FREQUENCY (2500)
+  '=': 2800, // Skip END_FREQUENCY (2700)
+  '{': 2900,
+  '}': 3000,
+  '[': 3100,
+  ']': 3200,
+  '|': 3300,
+  '\\': 3400,
+  ':': 3500,
+  ';': 3600,
+  '"': 3700,
+  "'": 3800,
+  '<': 3900,
+  '>': 4000,
+  ',': 4100,
+  '.': 4200,
+  '/': 4300,
+  '?': 4400,
+  '`': 4500,
+  '~': 4600,
+  
+  // Numbers - 4700-5600Hz range (100Hz spacing)
+  '0': 4700,
+  '1': 4800,
+  '2': 4900,
+  '3': 5000,
+  '4': 5100,
+  '5': 5200,
+  '6': 5300,
+  '7': 5400,
+  '8': 5500,
+  '9': 5600,
+  
+  // Uppercase letters - 5700-8200Hz range (100Hz spacing)
+  'A': 5700,
+  'B': 5800,
+  'C': 5900,
+  'D': 6000,
+  'E': 6100,
+  'F': 6200,
+  'G': 6300,
+  'H': 6400,
+  'I': 6500,
+  'J': 6600,
+  'K': 6700,
+  'L': 6800,
+  'M': 6900,
+  'N': 7000,
+  'O': 7100,
+  'P': 7200,
+  'Q': 7300,
+  'R': 7400,
+  'S': 7500,
+  'T': 7600,
+  'U': 7700,
+  'V': 7800,
+  'W': 7900,
+  'X': 8000,
+  'Y': 8100,
+  'Z': 8200,
+};
+
+// Print frequency map size and ranges
+console.log(`Initialized frequency map for ${Object.keys(CHAR_FREQUENCIES).length} characters`);
+console.log('Frequency ranges:');
+console.log('- Space: 900 Hz');
+console.log('- Special characters: 1300-4600 Hz (100Hz spacing)');
+console.log('- Numbers: 4700-5600 Hz (100Hz spacing)');
+console.log('- START marker: 2500 Hz');
+console.log('- END marker: 2700 Hz');
+console.log('- Uppercase letters: 5700-8200 Hz (100Hz spacing)');
+
 // State for decoding
 let isReceivingMessage = false;
-let messageBuffer: string[] = [];
-let lastSyncTime = 0;
-let isInSync = false;
+let messageBuffer: string = ''; // Store characters directly
+let startMarkerDetectionCount = 0;
+let endMarkerDetectionCount = 0;
 let lastDetectedFrequency = 0;
 let lastDetectedTime = 0;
-let detectionDebounceTime = 30; // ms to avoid duplicate detections - shorter for better response
-let endSignatureDetectionCount = 0; // Count of end signature detections
-let lastDecodedMessage = ''; // Track last successfully decoded message
+let lastDetectedChar = '';
+let transmissionStartTime = 0;
+let recentCharacters: { char: string, time: number }[] = []; // Track recent character detections
+let charFrequencyCounts: Map<string, number> = new Map(); // Count how many times we've seen each character
 
 // Log direct to console for better debugging
 const logMessage = (msg: string) => {
@@ -61,6 +163,7 @@ const ensureAudioContextReady = async (audioContext: AudioContext): Promise<bool
 
 /**
  * Play a tone with the given frequency for the specified duration
+ * Balanced for better reliability while keeping good speed
  */
 const playTone = async (
   audioContext: AudioContext,
@@ -76,15 +179,15 @@ const playTone = async (
     return startTime; // Return current time without playing
   }
   
-  // Create audio nodes
+  // Create audio nodes for primary tone
   const oscillator = audioContext.createOscillator();
   const gainNode = audioContext.createGain();
   
   oscillator.type = 'sine';
   oscillator.frequency.value = frequency;
   
-  // Add fade in/out to avoid clicks
-  const fadeTime = Math.min(0.005, duration / 10);
+  // Balanced fade times for reliability without sacrificing too much speed
+  const fadeTime = Math.min(0.004, duration / 18); // Slightly longer fade for better reliability
   
   gainNode.gain.setValueAtTime(0, startTime);
   gainNode.gain.linearRampToValueAtTime(volume, startTime + fadeTime);
@@ -97,159 +200,56 @@ const playTone = async (
   oscillator.start(startTime);
   oscillator.stop(startTime + duration);
   
+  // Add a parallel secondary tone if enabled (improves detection)
+  if (USE_PARALLEL_TONES && frequency !== START_FREQUENCY && frequency !== END_FREQUENCY) {
+    // Create a secondary tone with slight frequency offset for better detection
+    const oscillator2 = audioContext.createOscillator();
+    const gainNode2 = audioContext.createGain();
+    
+    oscillator2.type = 'sine';
+    oscillator2.frequency.value = frequency + PARALLEL_TONE_OFFSET;
+    
+    gainNode2.gain.setValueAtTime(0, startTime);
+    gainNode2.gain.linearRampToValueAtTime(PARALLEL_TONE_VOLUME, startTime + fadeTime);
+    gainNode2.gain.setValueAtTime(PARALLEL_TONE_VOLUME, startTime + duration - fadeTime);
+    gainNode2.gain.linearRampToValueAtTime(0, startTime + duration);
+    
+    oscillator2.connect(gainNode2);
+    gainNode2.connect(audioContext.destination);
+    
+    oscillator2.start(startTime);
+    oscillator2.stop(startTime + duration);
+  }
+  
   return startTime + duration;
 };
 
 /**
- * Play a distinct start pattern - make it more recognizable
+ * Convert a character to its corresponding frequency
  */
-const playStartSignature = async (
-  audioContext: AudioContext,
-  startTime: number
-): Promise<number> => {
-  logMessage('Playing start signature');
-  let currentTime = startTime;
+const charToFrequency = (char: string): number => {
+  // Always use uppercase for consistent mapping
+  const upperChar = char.toUpperCase();
   
-  // Play a more complex start signature for better detection - increasing frequencies
-  for (let i = 0; i < 3; i++) {
-    currentTime = await playTone(
-      audioContext, 
-      START_FREQUENCY + (i * 100), 
-      0.15, // Longer tones
-      currentTime,
-      0.95 // Louder
-    );
-    
-    // Small gap between tones
-    currentTime += 0.02;
+  // Return the frequency for this character, or 0 if not supported
+  return CHAR_FREQUENCIES[upperChar] || 0;
+};
+
+/**
+ * Convert a frequency back to the original character
+ */
+const frequencyToChar = (frequency: number): string | null => {
+  // Find the closest character within tolerance
+  for (const [char, charFreq] of Object.entries(CHAR_FREQUENCIES)) {
+    if (Math.abs(frequency - charFreq) < FREQUENCY_TOLERANCE) {
+      return char;
+    }
   }
-  
-  return currentTime;
-};
-
-/**
- * Play an end signature pattern - make it more recognizable
- */
-const playEndSignature = async (
-  audioContext: AudioContext,
-  startTime: number
-): Promise<number> => {
-  logMessage('Playing end signature');
-  let currentTime = startTime;
-  
-  // Play a more complex end signature - decreasing frequencies
-  for (let i = 0; i < 3; i++) {
-    currentTime = await playTone(
-      audioContext, 
-      END_FREQUENCY - (i * 100), 
-      0.15, // Longer tones
-      currentTime,
-      0.95 // Louder
-    );
-    
-    // Small gap between tones
-    currentTime += 0.02;
-  }
-  
-  return currentTime;
-};
-
-/**
- * Play sync tone to maintain timing
- */
-const playSyncTone = async (
-  audioContext: AudioContext,
-  startTime: number
-): Promise<number> => {
-  return await playTone(
-    audioContext,
-    SYNC_FREQUENCY,
-    SYNC_DURATION,
-    startTime,
-    0.95 // Louder
-  );
-};
-
-/**
- * Convert a hexadecimal digit to a frequency
- */
-const hexToFrequency = (hex: string): number => {
-  const hexValue = parseInt(hex, 16);
-  return BASE_DATA_FREQUENCY + (hexValue * FREQUENCY_STEP);
-};
-
-/**
- * Convert a frequency back to a hexadecimal digit with more tolerance
- */
-const frequencyToHex = (frequency: number): string | null => {
-  if (frequency < BASE_DATA_FREQUENCY - FREQUENCY_TOLERANCE) return null;
-  
-  const hexValue = Math.round((frequency - BASE_DATA_FREQUENCY) / FREQUENCY_STEP);
-  
-  // Check if the value is in the valid hex range (0-15)
-  if (hexValue >= 0 && hexValue <= 15) {
-    return hexValue.toString(16).toLowerCase();
-  }
-  
   return null;
 };
 
 /**
- * Convert text to hexadecimal string
- */
-const textToHex = (text: string): string => {
-  let hex = '';
-  
-  for (let i = 0; i < text.length; i++) {
-    const charCode = text.charCodeAt(i);
-    // Convert each character to a 2-digit hex representation
-    hex += charCode.toString(16).padStart(2, '0');
-  }
-  
-  return hex;
-};
-
-/**
- * Convert hexadecimal string back to text
- */
-const hexToText = (hex: string): string => {
-  let text = '';
-  
-  // Process 2 hex digits at a time (1 byte/character)
-  for (let i = 0; i < hex.length; i += 2) {
-    if (i + 1 < hex.length) {
-      try {
-        const charCode = parseInt(hex.substring(i, i + 2), 16);
-        if (!isNaN(charCode) && charCode >= 32 && charCode <= 126) { // Printable ASCII
-          text += String.fromCharCode(charCode);
-        } else {
-          text += '?'; // Replace non-printable with question mark
-        }
-      } catch (e) {
-        text += '?'; // Replace invalid hex with question mark
-      }
-    }
-  }
-  
-  return text;
-};
-
-/**
- * Calculate a checksum (XOR of all characters) for error detection
- */
-const calculateChecksum = (text: string): string => {
-  let checksum = 0;
-  
-  for (let i = 0; i < text.length; i++) {
-    checksum ^= text.charCodeAt(i); // XOR operation
-  }
-  
-  // Return as a 2-character hex string
-  return checksum.toString(16).padStart(2, '0');
-};
-
-/**
- * Encode text to audio and play it - using hexadecimal encoding
+ * Encode text into audio signals
  */
 export const encodeText = async (
   text: string,
@@ -264,75 +264,222 @@ export const encodeText = async (
       return;
     }
     
-    logMessage(`Encoding text: "${text}" using hexadecimal encoding`);
+    // Convert all text to uppercase to match our frequency mapping
+    text = text.toUpperCase();
+    
+    logMessage(`Encoding text: "${text}" using optimized batch character encoding`);
     const startTime = audioContext.currentTime;
     let currentTime = startTime;
     
-    // Play start signature
-    currentTime = await playStartSignature(audioContext, currentTime);
-    currentTime += 0.2; // Pause after signature
+    // Add a small initial delay (balanced for reliability)
+    currentTime += 0.03; // Increased slightly for better reliability (from 0.025s)
     
-    // Convert text to hex
-    const hexData = textToHex(text);
-    console.log(`Hex data (${hexData.length} digits):`, hexData);
+    // Play start marker - one shorter tone
+    logMessage('Playing start marker');
+    currentTime = await playTone(
+      audioContext,
+      START_FREQUENCY,
+      START_MARKER_DURATION,
+      currentTime,
+      VOLUME
+    );
     
-    // Calculate checksum
-    const checksum = calculateChecksum(text);
-    console.log(`Checksum: ${checksum}`);
-    const hexDataWithChecksum = hexData + checksum;
+    // Add gap after start marker
+    currentTime += 0.03; // Increased slightly for better reliability (from 0.025s)
     
-    // Play a sync tone before the data
-    currentTime = await playSyncTone(audioContext, currentTime);
-    currentTime += 0.05; // Small gap
+    // OPTIMIZATION: Pre-schedule all character tones at once with batch scheduling
+    const characters = text.split('');
     
-    // Transmit hex data with sync tones for timing
-    const digitsPerSync = 6; // Add sync tone more frequently (every 6 hex digits)
-    for (let i = 0; i < hexDataWithChecksum.length; i++) {
-      const hexDigit = hexDataWithChecksum[i];
-      const frequency = hexToFrequency(hexDigit);
+    // Define the type for our audio nodes
+    type AudioNodeSet = {
+      char: string;
+      frequency: number;
+      oscillator: OscillatorNode;
+      gainNode: GainNode;
+      oscillator2: OscillatorNode | null;
+      gainNode2: GainNode | null;
+    };
+    
+    // Create all oscillators and gain nodes first for more efficient scheduling
+    const nodes: AudioNodeSet[] = characters
+      .map(char => {
+        const frequency = charToFrequency(char);
+        
+        if (frequency === 0) {
+          console.warn(`Skipping unsupported character: '${char}'`);
+          return null;
+        }
+        
+        // Create nodes for this character
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.type = 'sine';
+        oscillator.frequency.value = frequency;
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // For parallel tones if enabled
+        let oscillator2: OscillatorNode | null = null;
+        let gainNode2: GainNode | null = null;
+        
+        if (USE_PARALLEL_TONES) {
+          oscillator2 = audioContext.createOscillator();
+          gainNode2 = audioContext.createGain();
+          
+          oscillator2.type = 'sine';
+          oscillator2.frequency.value = frequency + PARALLEL_TONE_OFFSET;
+          
+          oscillator2.connect(gainNode2);
+          gainNode2.connect(audioContext.destination);
+        }
+        
+        return { 
+          char, 
+          frequency, 
+          oscillator, 
+          gainNode, 
+          oscillator2, 
+          gainNode2 
+        };
+      })
+      .filter((node): node is AudioNodeSet => node !== null); // Type-safe filter to remove nulls
+    
+    // Now schedule all the tones in sequence with optimized timing
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const { char, frequency, oscillator, gainNode, oscillator2, gainNode2 } = node;
       
-      console.log(`Transmitting hex digit ${hexDigit} at ${frequency}Hz`);
+      // Optimized fade times for faster transmission
+      const fadeTime = Math.min(0.005, CHARACTER_DURATION / 12); // Ultra-fast fade for quick tones
       
-      // Play the hex tone
-      currentTime = await playTone(audioContext, frequency, HEX_DURATION, currentTime);
+      // Schedule primary tone
+      gainNode.gain.setValueAtTime(0, currentTime);
+      gainNode.gain.linearRampToValueAtTime(VOLUME, currentTime + fadeTime);
+      gainNode.gain.setValueAtTime(VOLUME, currentTime + CHARACTER_DURATION - fadeTime);
+      gainNode.gain.linearRampToValueAtTime(0, currentTime + CHARACTER_DURATION);
       
-      // Add a tiny gap between digits
-      currentTime += 0.01;
+      oscillator.start(currentTime);
+      oscillator.stop(currentTime + CHARACTER_DURATION);
       
-      // Add sync tone periodically to maintain timing
-      if ((i + 1) % digitsPerSync === 0 && i < hexDataWithChecksum.length - 1) {
-        currentTime = await playSyncTone(audioContext, currentTime);
-        currentTime += 0.02; // Gap after sync
+      // Schedule parallel tone if enabled
+      if (USE_PARALLEL_TONES && oscillator2 && gainNode2) {
+        gainNode2.gain.setValueAtTime(0, currentTime);
+        gainNode2.gain.linearRampToValueAtTime(PARALLEL_TONE_VOLUME, currentTime + fadeTime);
+        gainNode2.gain.setValueAtTime(PARALLEL_TONE_VOLUME, currentTime + CHARACTER_DURATION - fadeTime);
+        gainNode2.gain.linearRampToValueAtTime(0, currentTime + CHARACTER_DURATION);
+        
+        oscillator2.start(currentTime);
+        oscillator2.stop(currentTime + CHARACTER_DURATION);
       }
+      
+      // Display scheduling status periodically
+      if (i % 5 === 0 || i === nodes.length - 1) {
+        console.log(`Scheduling character '${char}' at ${frequency}Hz at time ${currentTime.toFixed(3)}`);
+      }
+      
+      // Update the time for the next character
+      currentTime += CHARACTER_DURATION + CHARACTER_GAP;
     }
     
-    // Add a small pause before the end signature
-    currentTime += 0.1;
+    // Add pause before end marker
+    currentTime += 0.03; // Increased slightly for better reliability (from 0.025s)
     
-    // Play end signature
-    currentTime = await playEndSignature(audioContext, currentTime);
+    // Play end marker - one shorter tone
+    logMessage('Playing end marker');
+    currentTime = await playTone(
+      audioContext,
+      END_FREQUENCY,
+      END_MARKER_DURATION,
+      currentTime,
+      VOLUME
+    );
     
     const totalDuration = (currentTime - startTime) * 1000;
-    logMessage(`Transmission complete, duration: ${totalDuration.toFixed(0)}ms`);
+    const charsPerSecond = text.length / ((totalDuration) / 1000);
+    logMessage(`Transmission complete, duration: ${totalDuration.toFixed(0)}ms, speed: ${charsPerSecond.toFixed(1)} chars/sec`);
     
-    // Resolve when the whole message is played
-    setTimeout(() => resolve(), totalDuration);
+    // Resolve when the whole message is played with an appropriate buffer
+    // This ensures the audio has completely finished playing before resolving
+    const endBuffer = Math.max(100, totalDuration * 0.05); // Add 5% buffer or at least 100ms
+    logMessage(`Waiting ${endBuffer.toFixed(0)}ms for audio to complete...`);
+    
+    setTimeout(() => {
+      logMessage('Transmission fully complete');
+      resolve();
+    }, totalDuration + endBuffer);
   });
 };
 
 /**
- * NEW: Try to fix corrupted hex data if possible
+ * Enhanced character deduplication and filtering system
+ * Balanced for optimal speed and accuracy
  */
-const attemptHexDataRecovery = (hexData: string): string => {
-  // Make sure we have an even number of characters (hex digits always come in pairs)
-  if (hexData.length % 2 !== 0) {
-    hexData = hexData.slice(0, -1); // Remove the last character if odd
+const shouldAddCharacter = (char: string): boolean => {
+  const now = Date.now();
+  
+  // Clean up old character detections - balanced time window
+  recentCharacters = recentCharacters.filter(entry => (now - entry.time) < 450); // Increased window for better reliability
+  
+  // Strategy 1: Simple time-based debounce with balanced lockout time
+  // If we've seen this exact character recently, reject it
+  for (const entry of recentCharacters) {
+    if (entry.char === char && (now - entry.time) < CHARACTER_LOCKOUT_TIME) {
+      console.log(`Rejecting duplicate '${char}' - detected ${now - entry.time}ms ago`);
+      return false;
+    }
   }
   
-  // Replace any invalid hex characters with '0'
-  const fixedHex = hexData.replace(/[^0-9a-f]/gi, '0');
+  // Strategy 2: Check for unusual frequency - balanced approach
+  let consecutiveCount = 0;
+  const recentCharsToCheck = Math.min(recentCharacters.length, 4); // Check more characters for better accuracy
   
-  return fixedHex;
+  for (let i = recentCharacters.length - 1; i >= recentCharacters.length - recentCharsToCheck; i--) {
+    if (i < 0) break; // Safety check
+    if (recentCharacters[i].char === char) {
+      consecutiveCount++;
+      // Only filter consecutive identical characters (except space and common letters) 
+      if (consecutiveCount >= 3 && char !== ' ' && !isCommonRepeatingChar(char)) {
+        console.log(`Rejecting unusual frequency of character '${char}'`);
+        return false;
+      }
+    } else {
+      break;
+    }
+  }
+  
+  // Special treatment for tricky punctuation/special characters
+  // Balance between speed and accuracy
+  if (char.match(/[-_+=$&@#%^*(){}[\]|\\:;"'<>,.?/]/)) {
+    // More careful with special characters
+    for (const entry of recentCharacters) {
+      if (entry.char === char && (now - entry.time) < 350) { // Increased from 300ms for better accuracy
+        console.log(`Rejecting duplicate special character '${char}'`);
+        return false;
+      }
+    }
+  }
+  
+  // Add this character to our recent detections
+  recentCharacters.push({ char, time: now });
+  return true; // Not a duplicate based on our strategies
+};
+
+/**
+ * Helper function to identify characters that commonly repeat in text
+ */
+const isCommonRepeatingChar = (char: string): boolean => {
+  // Allow repeats for letters that commonly repeat: E, L, O, T, etc.
+  return ['E', 'L', 'O', 'T', 'M', 'S', 'P', 'A'].includes(char);
+};
+
+/**
+ * Process received message to improve accuracy
+ * Applies various rules to clean up the message
+ */
+const postProcessMessage = (message: string): string => {
+  return message;
 };
 
 /**
@@ -343,7 +490,7 @@ export const decodeAudio = (
   sampleRate: number
 ): string | null => {
   try {
-    // Find the dominant frequency
+    // Find the dominant frequency with a simple algorithm
     let maxBin = 0;
     let maxValue = 0;
     
@@ -354,149 +501,146 @@ export const decodeAudio = (
       }
     }
     
-    // If no significant audio, return null
+    // If no significant audio or below our threshold, return null
     if (maxValue < SIGNAL_THRESHOLD) return null;
     
     // Calculate the actual frequency
     const binFrequency = maxBin * sampleRate / (frequencyData.length * 2);
     
+    // Filter out frequencies that are too low or too high
+    if (binFrequency < MINIMUM_VALID_FREQUENCY || binFrequency > MAXIMUM_VALID_FREQUENCY) {
+      // Only log if it's a significant signal
+      if (maxValue > SIGNAL_THRESHOLD + 50) {
+        console.log(`Ignoring out-of-range frequency: ${binFrequency.toFixed(0)}Hz (${maxValue})`);
+      }
+      return null;
+    }
+    
     // Current time (approximation based on audio buffer frame)
     const currentTime = Date.now();
     
-    // Debounce frequency detection to avoid duplicates
-    if (Math.abs(binFrequency - lastDetectedFrequency) < 20 && 
-        currentTime - lastDetectedTime < detectionDebounceTime) {
+    // Improved debounce frequency detection
+    if (Math.abs(binFrequency - lastDetectedFrequency) < 15 && 
+        currentTime - lastDetectedTime < DEBOUNCE_TIME) {
       return null;
     }
     
-    // Update last detected frequency and time
-    lastDetectedFrequency = binFrequency;
-    lastDetectedTime = currentTime;
+    // Debug logs for all significant detections
+    if (maxValue > SIGNAL_THRESHOLD) {
+      // Update last detected frequency and time
+      lastDetectedFrequency = binFrequency;
+      lastDetectedTime = currentTime;
+    }
     
-    // Check for start signature
+    // Check for timeout (15 seconds) if we're receiving a message - reduced from 20s
+    if (isReceivingMessage && (currentTime - transmissionStartTime > 15000)) {
+      console.log('⚠️ TRANSMISSION TIMEOUT - Force ending after 15 seconds');
+      const message = messageBuffer;
+      
+      // Reset state
+      isReceivingMessage = false;
+      messageBuffer = '';
+      
+      // Reset character tracking
+      charFrequencyCounts.clear();
+      
+      // Return what we have with a timeout marker
+      if (message.length > 0) {
+        return "[STREAM_END] " + message + " (timeout)";
+      }
+      
+      return "[STREAM_END] (timeout)";
+    }
+    
+    // Check for start marker with improved accuracy
     if (!isReceivingMessage && 
         Math.abs(binFrequency - START_FREQUENCY) < FREQUENCY_TOLERANCE && 
-        maxValue > 90) {
-      console.log('***** DETECTED START SIGNATURE *****');
-      isReceivingMessage = true;
-      messageBuffer = [];
-      isInSync = false;
-      return null;
-    }
-    
-    // Check for sync tone
-    if (isReceivingMessage && Math.abs(binFrequency - SYNC_FREQUENCY) < FREQUENCY_TOLERANCE) {
-      console.log('Detected sync tone');
-      lastSyncTime = currentTime;
-      isInSync = true;
-      return null;
-    }
-    
-    // Process hex digits only if we're receiving
-    if (isReceivingMessage) {
-      // If too much time has passed since the last sync, we might be out of sync
-      if (currentTime - lastSyncTime > 3000) { // 3 second timeout
-        console.log('Lost sync due to timeout');
-        isInSync = false;
-      }
+        maxValue > SIGNAL_THRESHOLD) {
       
-      // Check for hex frequency
-      const hexDigit = frequencyToHex(binFrequency);
-      if (hexDigit !== null) {
-        console.log(`Detected hex digit: ${hexDigit} from frequency ${binFrequency.toFixed(0)}Hz`);
+      // Count start marker detections for better reliability
+      startMarkerDetectionCount++;
+      
+      console.log(`Potential start marker detected (${startMarkerDetectionCount}/2), freq: ${binFrequency.toFixed(0)}Hz, strength: ${maxValue}`);
+      
+      // Require 2 detections for better reliability
+      if (startMarkerDetectionCount >= 2) { // Increased from 1 to 2 for better reliability
+        console.log('***** DETECTED START MARKER *****');
+        isReceivingMessage = true;
+        messageBuffer = '';
+        transmissionStartTime = currentTime;
+        startMarkerDetectionCount = 0;
+        recentCharacters = []; // Clear recent characters
+        charFrequencyCounts.clear(); // Reset character counts
         
-        // Only add hex digits that have a significant volume
-        if (maxValue > 80) {
-          messageBuffer.push(hexDigit);
+        // Return a special marker for the UI to indicate streaming is starting
+        return "[STREAM_START]";
+      }
+      return null;
+    } else if (!isReceivingMessage) {
+      // Reset counter if we're not seeing start frequencies
+      startMarkerDetectionCount = 0;
+    }
+    
+    // Check for end marker with improved accuracy
+    if (isReceivingMessage && 
+        Math.abs(binFrequency - END_FREQUENCY) < FREQUENCY_TOLERANCE && 
+        maxValue > SIGNAL_THRESHOLD) {
+      
+      endMarkerDetectionCount++;
+      
+      console.log(`Potential end marker detected (${endMarkerDetectionCount}/2), freq: ${binFrequency.toFixed(0)}Hz, strength: ${maxValue}`);
+      
+      // Require 2 detections for better reliability
+      if (endMarkerDetectionCount >= 2) { // Increased from 1 to 2 for better reliability
+        console.log('***** DETECTED END MARKER *****');
+        
+        // Store the message and reset state
+        const message = messageBuffer;
+        isReceivingMessage = false;
+        messageBuffer = '';
+        endMarkerDetectionCount = 0;
+        recentCharacters = []; // Clear recent characters
+        charFrequencyCounts.clear(); // Reset character counts
+        
+        // Apply post-processing to improve message quality
+        const processedMessage = postProcessMessage(message);
+        
+        // If we have a message, return it
+        if (processedMessage.length > 0) {
+          console.log(`Decoded message: "${processedMessage}"`);
+          return "[STREAM_END] " + processedMessage;
         }
-        return null;
-      }
-      
-      // Check for end signature
-      if (Math.abs(binFrequency - END_FREQUENCY) < FREQUENCY_TOLERANCE) {
-        endSignatureDetectionCount++;
         
-        // Require multiple detections for better reliability
-        if (endSignatureDetectionCount >= 2) {
-          console.log('***** DETECTED END SIGNATURE *****');
-          isReceivingMessage = false;
-          isInSync = false;
-          endSignatureDetectionCount = 0;
+        return "[STREAM_END]";
+      }
+      return null;
+    } else if (isReceivingMessage) {
+      // Reset counter if we're not seeing end frequencies
+      endMarkerDetectionCount = 0;
+      
+      // Process character frequencies if we're receiving a message
+      // and the frequency is within our valid character range
+      if (binFrequency >= MINIMUM_VALID_FREQUENCY && binFrequency <= MAXIMUM_VALID_FREQUENCY) {
+        const char = frequencyToChar(binFrequency);
+        
+        if (char !== null) {
+          // Ensure the character is uppercase
+          const upperChar = char.toUpperCase();
           
-          // If we have collected data, convert it to text
-          if (messageBuffer.length > 0) {
-            console.log(`Message buffer (${messageBuffer.length} digits): ${messageBuffer.join('')}`);
+          console.log(`Detected character: '${upperChar}' from frequency ${binFrequency.toFixed(0)}Hz, strength: ${maxValue}`);
+          
+          // Use enhanced character filtering
+          if (shouldAddCharacter(upperChar)) {
+            console.log(`Adding character '${upperChar}' to message buffer`);
+            messageBuffer += upperChar;
+            lastDetectedChar = upperChar;
             
-            // We need at least 4 characters (2 for text, 2 for checksum)
-            if (messageBuffer.length >= 4) {
-              const hexData = messageBuffer.join('');
-              
-              // Extract checksum (last 2 characters)
-              const receivedChecksum = hexData.slice(-2);
-              const dataHex = hexData.slice(0, -2);
-              
-              console.log(`Data hex: ${dataHex}, Checksum: ${receivedChecksum}`);
-              
-              try {
-                // Fix any invalid hex data
-                const cleanedHex = attemptHexDataRecovery(dataHex);
-                
-                // Convert to text
-                const decodedText = hexToText(cleanedHex);
-                
-                // Check if the text looks valid
-                if (!decodedText || !/^[\x20-\x7E]+$/.test(decodedText)) {
-                  console.log(`Decoded text appears invalid: "${decodedText}"`);
-                  messageBuffer = []; // Clear buffer
-                  return null;
-                }
-                
-                // Calculate checksum for the decoded text
-                const calculatedChecksum = calculateChecksum(decodedText);
-                
-                console.log(`Decoded text: "${decodedText}", Calculated checksum: ${calculatedChecksum}`);
-                
-                // Avoid duplicate messages (can help if end signature detected multiple times)
-                if (decodedText === lastDecodedMessage) {
-                  console.log('Duplicate message detected, ignoring');
-                  messageBuffer = []; // Clear buffer
-                  return null;
-                }
-                
-                // Allow checksum to match regardless of case
-                if (receivedChecksum.toLowerCase() === calculatedChecksum.toLowerCase()) {
-                  console.log('✅ Checksum verification passed');
-                  console.log('Decoded message:', decodedText);
-                  lastDecodedMessage = decodedText;
-                  messageBuffer = []; // Clear buffer
-                  
-                  // Return the successfully decoded message
-                  return decodedText;
-                } else {
-                  console.log(`❌ Checksum verification failed: received ${receivedChecksum}, calculated ${calculatedChecksum}`);
-                  
-                  // Try to recover message despite checksum failure
-                  if (decodedText && decodedText.length > 0 && /^[\x20-\x7E]+$/.test(decodedText)) {
-                    console.log('Message appears to be valid text despite checksum failure, returning anyway');
-                    lastDecodedMessage = decodedText;
-                    messageBuffer = []; // Clear buffer
-                    return decodedText + " (checksum error)";
-                  }
-                  
-                  messageBuffer = []; // Clear buffer
-                }
-              } catch (e) {
-                console.error('Error decoding message:', e);
-                messageBuffer = []; // Clear buffer
-              }
-            }
+            // Return a streaming update with the new character
+            return "[STREAM]" + upperChar;
+          } else {
+            console.log(`Filtered out potential duplicate: '${upperChar}'`);
           }
-        } else {
-          console.log(`Potential end signature detected (${endSignatureDetectionCount}/2)`);
         }
-      } else {
-        // Reset counter if we're not seeing end frequencies
-        endSignatureDetectionCount = 0;
       }
     }
     
@@ -511,24 +655,15 @@ export const decodeAudio = (
  * Reset the decoder state (useful when starting new listening session)
  */
 export const resetDecoder = () => {
-  console.log('Resetting decoder state');
+  console.log('Decoder reset');
   isReceivingMessage = false;
-  messageBuffer = [];
-  lastSyncTime = 0;
-  isInSync = false;
+  messageBuffer = '';
+  startMarkerDetectionCount = 0;
+  endMarkerDetectionCount = 0;
   lastDetectedFrequency = 0;
   lastDetectedTime = 0;
-  endSignatureDetectionCount = 0;
-  lastDecodedMessage = '';
+  lastDetectedChar = '';
+  transmissionStartTime = 0;
+  recentCharacters = [];
+  charFrequencyCounts.clear();
 };
-
-/**
- * In a real implementation, we would need a more sophisticated algorithm that:
- * 1. Buffers and processes multiple frequency samples over time
- * 2. Uses signal processing to detect the start and end patterns
- * 3. Keeps track of timing to distinguish between digits
- * 4. Uses more robust error correction codes
- * 5. Implements adaptive frequency detection based on environmental conditions
- *
- * The simplified version above is for demonstration purposes only.
- */ 

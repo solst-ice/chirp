@@ -166,6 +166,8 @@ button {
   border-radius: 0;
   box-shadow: none;
   height: 280px;
+  display: flex;
+  flex-direction: column;
 }
 
 .message-header {
@@ -182,69 +184,112 @@ button {
   border: none;
 }
 
-/* Update received message container for reversed message order */
+/* Enhanced message display */
 .received-message {
-  height: calc(100% - 45px);
+  height: calc(100% - 20px); /* Fill entire available height minus margins */
+  width: calc(100% - 2px); /* Fill entire width minus borders */
   overflow-y: auto;
-  padding: 10px 5px;
-  color: var(--terminal-green);
-  white-space: pre-wrap;
-  line-height: 1.4;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  margin: 10px 0;
   font-family: var(--mono-font);
-  margin-top: 5px;
-  background-color: #000000;
-  
-  /* Reverse direction to show newest messages at top */
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-start;
-  justify-content: flex-end;
+  color: var(--text-color);
+  background-color: rgba(0, 0, 0, 0.6);
+  position: relative;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  box-sizing: border-box;
+  display: block; /* Changed from flex to block */
+  white-space: pre-line; /* Preserves line breaks */
 }
 
-/* Make timestamps much more visible and ensure proper display */
+/* Scrollbar styling to make it more visible */
+.received-message::-webkit-scrollbar {
+  width: 8px; /* Wider scrollbar */
+}
+
+.received-message::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+  border-left: 1px solid rgba(255, 43, 109, 0.2);
+}
+
+.received-message::-webkit-scrollbar-thumb {
+  background: var(--accent-color);
+  border-radius: 0;
+  border: 1px solid black;
+}
+
+.received-message::-webkit-scrollbar-thumb:hover {
+  background: var(--secondary-accent);
+}
+
 .timestamp {
-  color: var(--accent-color);
-  font-size: 0.8rem;
-  margin-right: 10px;
-  opacity: 0.95; /* Increased from 0.8 for better visibility */
-  font-weight: bold;
-  white-space: nowrap;
-  display: inline-block; /* Ensure timestamp is always displayed as a block */
-  padding-right: 5px;
-  border-right: 1px solid var(--accent-color);
+  font-size: 0.8em;
+  color: #888;
+  margin-top: 4px;
+  text-align: right;
+  display: block;
+  font-style: italic;
 }
 
-/* Style for individual messages with timestamps - reduce margin for more compact display */
+/* Message line with extra spacing at the end */
 .message-line {
-  margin-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 43, 109, 0.2);
-  padding-bottom: 5px;
+  margin-bottom: 16px; /* Increased spacing between messages */
+  padding-bottom: 12px;
   width: 100%;
   box-sizing: border-box;
   font-family: var(--mono-font);
-  word-break: break-word; /* Allow wrapping of long messages */
-  display: block; /* Ensure message line is treated as a block */
-}
-
-/* Force scroll to start at the top to ensure newest messages are visible */
-.received-message:after {
-  content: '';
-  min-height: 5px;
-  width: 100%;
+  word-break: break-word;
   display: block;
-  order: -1;
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 8px;
+  border-left: 3px solid var(--accent-color);
+  border-bottom: 1px solid rgba(255, 43, 109, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  white-space: pre-wrap; /* Preserve whitespace and allow wrapping */
+  margin-top: 8px; /* Add top margin for spacing between messages */
 }
 
-/* Make the "no messages" text centered when no messages */
+/* Add extra space after each message with a pseudo-element for better visibility */
+.message-line::after {
+  content: "";
+  display: block;
+  height: 6px; /* Extra space height */
+  width: 100%;
+  position: absolute;
+  bottom: -7px;
+  left: 0;
+}
+
+/* Empty state for received message */
 .received-message:empty::before {
-  content: 'NO INCOMING TRANSMISSION DETECTED...\n_ ';
-  color: var(--terminal-green);
+  content: "NO INCOMING TRANSMISSION DETECTED...\A_ ";
+  white-space: pre;
+  color: var(--text-color);
   opacity: 0.7;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  text-align: center;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Animate cursor for emphasis */
+.terminal-cursor {
+  display: inline-block;
+  width: 10px;
+  height: 1.2em;
+  background-color: transparent;
+  vertical-align: middle;
+  margin-left: 2px;
+  animation: blink 1s step-start infinite;
+  font-weight: bold;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* Transmit container styling - remove box shadow */
@@ -281,7 +326,7 @@ textarea {
   display: block;
   background-color: var(--accent-color);
   color: var(--text-color);
-  border: none;
+  border: 3px solid var(--secondary-accent); /* Add a border with secondary accent color */
   padding: 10px 15px;
   text-transform: uppercase;
   font-weight: bold;
@@ -290,15 +335,40 @@ textarea {
   font-family: var(--mono-font);
   letter-spacing: 1px;
   border-radius: 0; /* Removed rounded corners */
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.3); /* Add subtle glow effect */
+  position: relative;
+  transition: all 0.2s ease;
+  outline: none;
 }
 
 .transmit-container button:hover {
   background-color: var(--terminal-red);
+  border-color: var(--terminal-red);
+  box-shadow: 0 0 15px rgba(255, 0, 60, 0.4);
+}
+
+.transmit-container button:active {
+  transform: translateY(1px);
+  box-shadow: 0 0 5px rgba(255, 0, 60, 0.4);
 }
 
 .transmit-container button:disabled {
   background-color: var(--dark-accent);
+  border-color: var(--border-color);
+  box-shadow: none;
   cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Add highlight effect to transmit button */
+.transmit-container button::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, rgba(0, 240, 255, 0.8), transparent);
 }
 
 /* Stats container */
@@ -335,7 +405,8 @@ textarea {
   animation: blink 1.5s infinite;
   text-transform: uppercase;
   letter-spacing: 1px;
-  border-radius: 0; /* Removed rounded corners */
+  border-radius: 0;
+  z-index: 10; /* Ensure it shows above the scrolling content */
 }
 
 @keyframes blink {
@@ -388,14 +459,17 @@ textarea {
   background: linear-gradient(to top, var(--accent-color), var(--terminal-green));
 }
 
-/* Terminal-style cursor */
-.terminal-cursor {
-  animation: terminal-blink 1s step-end infinite;
-}
-
-@keyframes terminal-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+/* Frequency range information display */
+.frequency-range-info {
+  margin-top: 5px;
+  padding: 5px 10px;
+  font-size: 0.7rem;
+  color: var(--secondary-accent);
+  background-color: rgba(0, 0, 0, 0.5);
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+  font-family: var(--mono-font);
+  letter-spacing: 0.5px;
 }
 
 /* Mobile responsiveness */
@@ -465,19 +539,6 @@ textarea {
 /* Make sure the message container still has the right height */
 .message-container {
   height: 280px;
-}
-
-/* Update received message sizing */
-.received-message {
-  height: calc(100% - 40px);
-  overflow-y: auto;
-  padding: 10px 5px;
-  color: var(--terminal-green);
-  white-space: pre-wrap;
-  line-height: 1.4;
-  font-family: var(--mono-font);
-  margin-top: 5px;
-  background-color: #000000;
 }
 
 /* Ensure black background everywhere, even when scrolling */
@@ -575,4 +636,444 @@ body:after {
 .app-footer a:hover {
   opacity: 1;
   text-decoration: underline;
+}
+
+/* Streaming message styling - enhanced to be more noticeable */
+.streaming-message {
+  position: relative;
+  background-color: rgba(0, 0, 0, 0.6);
+  border-left: 4px solid #0084ff;
+  padding-left: 8px !important;
+  animation: pulse 1.5s infinite alternate;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+@keyframes pulse {
+  0% {
+    border-left-color: #0084ff;
+  }
+  100% {
+    border-left-color: #00e1ff;
+  }
+}
+
+.status-indicator.streaming {
+  animation: blink 0.8s step-start infinite;
+  color: #00e1ff;
+  font-weight: bold;
+}
+
+/* Message separator for better visual distinction */
+.message-separator {
+  height: 1px;
+  margin-top: 12px;
+  margin-bottom: 8px; /* Add bottom margin for better spacing */
+  background: linear-gradient(to right, 
+    rgba(255, 43, 109, 0.7), 
+    rgba(0, 240, 255, 0.5), 
+    rgba(255, 43, 109, 0.7));
+  opacity: 0.8; /* Increased opacity */
+}
+
+/* Enhance visualization of characters in streaming mode */
+.streaming-message .timestamp {
+  background-color: rgba(0, 0, 0, 0.7); /* Darken background behind timestamp */
+  padding: 2px 5px;
+  border-radius: 2px;
+  color: #00f0ff; /* Use different color for streaming timestamps */
+}
+
+/* Add subtle highlight to newly added characters in streaming messages */
+.streaming-message:after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  background: linear-gradient(to bottom, transparent, var(--secondary-accent), transparent);
+  opacity: 0.7;
+  animation: highlight-pulse 1s infinite;
+}
+
+@keyframes highlight-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+}
+
+/* Status indicator - make more prominent during streaming */
+.status-indicator.streaming {
+  background-color: rgba(0, 0, 0, 0.9);
+  border: 2px solid var(--secondary-accent);
+  color: var(--secondary-accent);
+  animation: blink 1s infinite;
+  z-index: 100;
+  font-weight: bold;
+}
+
+/* Add styling for the transmitting state */
+.status-indicator.transmitting {
+  background-color: rgba(0, 0, 0, 0.9);
+  border: 2px solid var(--terminal-green);
+  color: var(--terminal-green);
+  animation: none; /* No blinking for transmitting state */
+  z-index: 100;
+  font-weight: bold;
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.5); /* Add green glow */
+}
+
+/* Add styling for timeout messages */
+.timeout-message {
+  background-color: rgba(30, 0, 0, 0.6);
+  border-left: 4px solid #ff3300;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+
+/* Modify sent message styling to make it more compact */
+.sent-message {
+  color: var(--terminal-green) !important;
+  border-left: 4px solid var(--terminal-green);
+  background-color: rgba(0, 20, 0, 0.4);
+  padding: 2px 8px; /* Reduced padding */
+  margin-left: -8px;
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+  line-height: 1.2; /* Tighter line height */
+}
+
+/* Ensure ALL text within sent messages is green regardless of nesting */
+div.message-line.sent-message,
+div.message-line.sent-message *,
+div.message-line.sent-message > span {
+  color: var(--terminal-green) !important;
+}
+
+/* Additional approach - sent message direct content should be green */
+.sent-message > * {
+  color: var(--terminal-green) !important;
+}
+
+/* Specifically target [SENT] indicators to ensure they're visible */
+.sent-indicator {
+  color: var(--terminal-green) !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+  animation: pulse 2s infinite;
+}
+
+/* Add a subtle pulse animation to make sent indicators more visible */
+@keyframes pulse {
+  0% { opacity: 0.8; }
+  50% { opacity: 1; }
+  100% { opacity: 0.8; }
+}
+
+/* Message timestamp styling */
+.timestamp {
+  font-size: 0.8em;
+  color: #888;
+  margin-top: 4px;
+  text-align: right;
+  display: block;
+  font-style: italic;
+}
+
+/* Adjust sent messages container for better compactness */
+.sent-messages-container {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px;
+  font-family: 'Unifont', monospace;
+  width: 100%;
+  border-top: 1px solid rgba(0, 255, 65, 0.2);
+  margin-top: 10px;
+}
+
+.sent-messages-container .message-line {
+  margin-bottom: 4px; /* Reduced margin */
+  padding: 2px 8px; /* Reduced padding */
+  color: #00ff41 !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+  line-height: 1.2; /* Tighter line height */
+}
+
+/* Make other message-line variants with [SENT] more compact as well */
+.message-line:has-text("[SENT]"),
+div.received-message div:has-text("[SENT]"),
+html body .app-container .message-container .received-message div:has-text("[SENT]") {
+  padding: 2px 8px; /* Reduced padding */
+  margin-bottom: 4px; /* Reduced margin */
+  line-height: 1.2; /* Tighter line height */
+}
+
+/* Ensure message content and timestamp are properly separated */
+.sent-message div, 
+.received-message div, 
+.streaming-message div, 
+.timeout-message div {
+  margin-bottom: 2px;
+}
+
+/* Direct green coloring for the timestamp in sent messages */
+.sent-message .timestamp {
+  color: var(--terminal-green) !important;
+  opacity: 0.8;
+}
+
+/* Add global style targeting any element that has '[SENT]' in its text content */
+[data-testid="message-display"] div:has-text("[SENT]") {
+  color: var(--terminal-green) !important;
+}
+
+/* Add a global style that applies directly to [SENT] text wherever it appears */
+strong.sent-indicator {
+  color: var(--terminal-green) !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+}
+
+/* Style any line with [SENT] in it, even in plain text mode */
+.received-message > div:not(.message-line) {
+  white-space: pre-line;
+}
+
+/* For the React state version - when using span instead of div */
+.sent-text {
+  color: var(--terminal-green);
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+  font-weight: bold;
+}
+
+/* More forceful CSS targeting for sent messages */
+div[data-sent="true"],
+div[data-sent="true"] *,
+div.message-line.sent-message,
+div.message-line.sent-message *,
+div.sent-message,
+div.sent-message * {
+  color: var(--terminal-green) !important;
+}
+
+/* Hyper specific CSS selector targeting to override any other styles */
+div[data-testid="message-display"] div.message-line.sent-message,
+div[data-testid="message-display"] div.message-line.sent-message *,
+div[data-testid="message-display"] div[data-sent="true"],
+div[data-testid="message-display"] div[data-sent="true"] * {
+  color: var(--terminal-green) !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+}
+
+/* Override for timestamps in sent messages */
+div.sent-message .timestamp,
+div.message-line.sent-message .timestamp {
+  color: var(--terminal-green) !important;
+  opacity: 0.8 !important;
+}
+
+/* MAXIMUM SPECIFICITY SENT MESSAGE STYLING */
+html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div[data-sent="true"],
+html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div.sent-message,
+html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div.message-line.sent-message,
+html body div.app-container div[data-testid="message-display"] div.message-line.sent-message,
+html body div.app-container div[data-testid="message-display"] div[data-sent="true"],
+div[data-testid="message-display"] div:has(strong.sent-indicator),
+div[data-testid="message-display"] div:has([class*="sent"]) {
+  color: var(--terminal-green) !important;
+  border-left: 4px solid var(--terminal-green) !important;
+  background-color: rgba(0, 20, 0, 0.4) !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+}
+
+/* Target ALL elements within sent messages */
+html body div.app-container div[data-testid="message-display"] div.message-line.sent-message *,
+html body div.app-container div[data-testid="message-display"] div[data-sent="true"] *,
+div[data-testid="message-display"] div:has(strong.sent-indicator) *,
+div[data-testid="message-display"] div:has([class*="sent"]) * {
+  color: var(--terminal-green) !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+}
+
+/* Target timestamps specifically in sent messages */
+html body div.app-container div[data-testid="message-display"] div.message-line.sent-message .timestamp,
+html body div.app-container div[data-testid="message-display"] div[data-sent="true"] .timestamp,
+div[data-testid="message-display"] div:has(strong.sent-indicator) .timestamp,
+div[data-testid="message-display"] div:has([class*="sent"]) .timestamp {
+  color: var(--terminal-green) !important;
+  opacity: 0.8 !important;
+}
+
+/* Target any line containing [SENT] text regardless of structure */
+div[data-testid="message-display"] div:has-text("[SENT]"),
+div[data-testid="message-display"] div:has-text("[SENT]") * {
+  color: var(--terminal-green) !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+}
+
+/* Add a direct style for [SENT] text itself */
+strong.sent-indicator,
+span.sent-indicator {
+  color: var(--terminal-green) !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.5) !important;
+}
+
+/* Add support for inline styles */
+[style*="color: var(--terminal-green)"] {
+  color: var(--terminal-green) !important;
+}
+
+/* Target any element with inline sent color style */
+[style*="color: var(--terminal-green)"] *,
+[style*="color:#00ff41"] *,
+[style*="color: #00ff41"] * {
+  color: var(--terminal-green) !important;
+}
+
+/* HARDCODED PATTERN MATCH FOR [HH:MM:SS] [SENT] format */
+div[data-testid="message-display"] div:has(text("[SENT]")),
+div.received-message div:contains("[SENT]"),
+.message-line:has-text("[SENT]"),
+div.message-line:not(.streaming-message):not(.timeout-message):has(text("[SENT]")),
+.received-message > div:has-text("[SENT]") {
+  color: #00ff41 !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+  background-color: rgba(0, 20, 0, 0.4) !important;
+  border-left: 4px solid #00ff41 !important;
+}
+
+/* Target the DIRECT TEXT with exact pattern */
+.received-message div, 
+.message-line {
+  color: var(--text-color);
+}
+
+/* But override for sent messages with exact color value */
+.received-message div:has-text("[SENT]"),
+.message-line:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Override for any text containing [SENT] */
+div.received-message *:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Force all text within the message to be green */
+.message-line:has-text("[SENT]") * {
+  color: #00ff41 !important;
+}
+
+/* Target direct text nodes using ::before hack - this applies color to text directly */
+div.received-message div:has-text("[SENT]")::before {
+  content: "";
+  display: inline;
+  color: #00ff41 !important;
+}
+
+/* Use direct child text node targeting */
+#message-display > div:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Direct color overrides for plain text */
+.received-message {
+  color: var(--text-color);
+}
+
+.received-message:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Use attribute selectors for catching text content */
+div[data-testid="message-display"] > div[class*="message-line"] {
+  color: var(--text-color);
+}
+
+div[data-testid="message-display"] > div:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Fallback for older browsers */
+.sent-message-fallback {
+  color: #00ff41 !important;
+  font-weight: bold;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+}
+
+/* Most aggressive selector - override ALL existing styles */
+html body .app-container .message-container .received-message div.message-line:has-text("[SENT]"),
+html body .app-container .message-container .received-message div:has-text("[SENT]") {
+  color: #00ff41 !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+  border-left: 4px solid #00ff41 !important;
+}
+
+/* Target the surrounding text as well */
+html body .app-container .message-container .received-message div:has-text("[SENT]") * {
+  color: #00ff41 !important;
+}
+
+/* ULTRA-HARDCORE COLORIZING */
+.app-container *:not(style):not(script):not(link):not(meta) {
+  color: var(--text-color) !important;
+}
+
+/* But then override for [SENT] with a harder !important */
+.app-container div:has-text("[SENT]"),
+.app-container *:has-text("[SENT]") {
+  color: #00ff41 !important;
+}
+
+/* Override again for any inner elements */
+.app-container div:has-text("[SENT]") *,
+.app-container *:has-text("[SENT]") * {
+  color: #00ff41 !important;
+}
+
+/* Target messages with text content matching pattern [HH:MM:SS] [SENT] directly using a custom attribute */
+#root .app-container div[data-testid="message-display"] div.message-line:not(.streaming-message):not(.timeout-message) {
+  position: relative;
+}
+
+/* Use attribute to mark and target any div with the specific pattern */
+#root .app-container div[data-testid="message-display"] div:has-text("\\[\\d{2}:\\d{2}:\\d{2}\\] \\[SENT\\]") {
+  color: #00ff41 !important;
+  font-weight: bold;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+  border-left: 4px solid #00ff41 !important;
+}
+
+/* Add styles for sent messages container */
+.sent-messages-container {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px;
+  font-family: 'Unifont', monospace;
+  width: 100%;
+  border-top: 1px solid rgba(0, 255, 65, 0.2);
+  margin-top: 10px;
+}
+
+.sent-messages-container .message-line {
+  margin-bottom: 8px;
+  color: #00ff41 !important;
+  font-weight: bold !important;
+  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+}
+
+/* Ensure all elements within sent messages have the right color */
+.sent-message * {
+  color: #00ff41 !important;
+}
+
+.sent-indicator {
+  color: #00ff41 !important;
+  font-weight: bold !important;
+}
+
+.sent-text {
+  color: #00ff41 !important;
 }
