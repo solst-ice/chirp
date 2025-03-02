@@ -30,6 +30,8 @@ function App() {
   
   // Add a state variable to track if initial message has been shown
   const [initialMessageShown, setInitialMessageShown] = useState<boolean>(false);
+  // Add a ref to track the same state to avoid race conditions
+  const initialMessageShownRef = useRef<boolean>(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -57,6 +59,8 @@ function App() {
   
   // Add a special ref just for sent messages that won't get overwritten
   const sentMessagesContainerRef = useRef<HTMLDivElement | null>(null);
+  
+  const [audioContextReady, setAudioContextReady] = useState<boolean>(false);
   
   // Add useEffect to load the custom font stylesheet
   useEffect(() => {
@@ -177,6 +181,7 @@ function App() {
       await audioContextRef.current.resume();
     }
     
+    setAudioContextReady(audioContextRef.current.state === 'running');
     return audioContextRef.current;
   };
   
@@ -1005,7 +1010,12 @@ function App() {
       // Reset status indicator after transmission is complete
       const statusIndicator = document.querySelector('.status-indicator');
       if (statusIndicator) {
-        statusIndicator.textContent = "STANDBY";
+        if (audioContextRef.current && audioContextRef.current.state === 'running') {
+          statusIndicator.textContent = "STANDBY";
+        } else {
+          statusIndicator.textContent = "CLICK TO INITIATE";
+          statusIndicator.classList.add('audio-not-ready');
+        }
         statusIndicator.classList.remove('transmitting');
       }
       
@@ -1017,16 +1027,52 @@ function App() {
     }
   };
 
+  // Auto-start listening when the component mounts
+  useEffect(() => {
+    // Clear previous initialization state
+    sessionStorage.removeItem('initialMessageShown');
+    initialMessageShownRef.current = false;
+    setInitialMessageShown(false);
+    
+    // Auto initialize the system with a small delay, but don't show message yet
+    const initTimeout = setTimeout(() => {
+      // Only initialize audio, don't show the message here
+      handleUserInteraction().then(() => {
+        setSystemInitialized(true);
+        // Auto-start listening with a short delay after initialization
+        setTimeout(() => {
+          startListening();
+        }, 500);
+      });
+    }, 1000);
+    
+    return () => clearTimeout(initTimeout);
+  }, []);
+  
   // Function to initialize audio context on user interaction
   const handleUserInteraction = async () => {
     try {
+      // Check if we have an AudioContext already
+      const wasRunningBefore = audioContextRef.current?.state === 'running';
+      
+      // Try to get/initialize audio context
       await getAudioContext();
+      
+      // Check if it's now running (state changed from suspended to running)
+      const isRunningNow = audioContextRef.current?.state === 'running';
+      
+      // Update UI state
+      setAudioContextReady(isRunningNow);
       setDebugText('Audio initialized (click Start Listening to begin)');
       
-      // Show initial "RECEIVING DATA..." message only if it hasn't been shown already
-      if (!initialMessageShown) {
+      // If the context state changed to running and we haven't shown the message yet
+      if (!wasRunningBefore && isRunningNow && !initialMessageShownRef.current) {
+        // Now show the RECEIVING DATA message when the AudioContext starts
         addReceivedMessage("RECEIVING DATA...", true);
+        initialMessageShownRef.current = true;
         setInitialMessageShown(true);
+        sessionStorage.setItem('initialMessageShown', 'true');
+        console.log('Audio context started, showing initial message');
       }
     } catch (error) {
       console.error('Error initializing AudioContext:', error);
@@ -1051,45 +1097,16 @@ function App() {
     setDebugMode(!debugMode);
   };
   
-  // Auto-start listening when the component mounts
-  useEffect(() => {
-    // Auto initialize the system with a small delay
-    const initTimeout = setTimeout(() => {
-      handleUserInteraction().then(() => {
-        setSystemInitialized(true);
-        // Auto-start listening with a short delay after initialization
-        setTimeout(() => {
-          startListening();
-        }, 500);
-      });
-    }, 1000);
-    
-    return () => clearTimeout(initTimeout);
-  }, []);
-  
   // Ensure messageDisplayRef is correctly initialized in useEffect
   useEffect(() => {
-    // Check if we need to initialize message containers
-    const initialMessageShown = sessionStorage.getItem('initialMessageShown') === 'true';
-    
-    // Show initial message if it's the first time
-    if (!initialMessageShown) {
-      addReceivedMessage("RECEIVING DATA...", true);
-      sessionStorage.setItem('initialMessageShown', 'true');
-    }
-    
-    // Clear any existing messages when the component mounts
-    // Remove messageDisplayRef reference
-    // if (messageDisplayRef.current) {
-    //   messageDisplayRef.current.innerHTML = ''; // Use empty string to trigger the :empty pseudo-selector
-    // }
+    // We're handling the initial message in the auto-start useEffect now
+    // No need to check sessionStorage anymore
     
     // Clear sent messages container
     if (sentMessagesContainerRef.current) {
       sentMessagesContainerRef.current.innerHTML = '';
     }
     
-    // ... existing code ...
   }, []);
   
   // Add useEffect to set the favicon when component mounts
@@ -1355,6 +1372,49 @@ function App() {
     };
   }, []);
   
+  // Add useEffect to check audio context state when component mounts
+  useEffect(() => {
+    // Check if the AudioContext exists and is in 'running' state
+    const checkAudioContextState = () => {
+      if (audioContextRef.current) {
+        setAudioContextReady(audioContextRef.current.state === 'running');
+      } else {
+        setAudioContextReady(false);
+      }
+    };
+
+    // Check initially
+    checkAudioContextState();
+
+    // Add event listeners to handle user interactions that might start the AudioContext
+    const handleInteraction = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        handleUserInteraction();
+      }
+    };
+
+    // Clean up any previous click listeners to prevent duplication
+    document.removeEventListener('click', handleInteraction);
+    
+    // Add a single click listener (without once:true to maintain control)
+    if (!initialMessageShownRef.current) {
+      document.addEventListener('click', handleInteraction);
+    }
+    
+    // Cleanup function
+    return () => {
+      document.removeEventListener('click', handleInteraction);
+    };
+  }, []);
+  
+  // Ensure sent messages container is initialized in useEffect
+  useEffect(() => {
+    // Clear sent messages container
+    if (sentMessagesContainerRef.current) {
+      sentMessagesContainerRef.current.innerHTML = '';
+    }
+  }, []);
+  
   return (
     <div className="app-container" onClick={handleUserInteraction}>
       <div className="title-container">
@@ -1449,7 +1509,12 @@ function App() {
           <div className="status-indicator">SYSTEM INITIALIZING<span className="terminal-cursor">_</span></div>
         )}
         {isListening && (
-          <div className="status-indicator">STANDBY<span className="terminal-cursor">_</span></div>
+          <div 
+            className={`status-indicator ${!audioContextReady ? 'audio-not-ready' : ''}`}
+            onClick={!audioContextReady ? handleUserInteraction : undefined}
+          >
+            {audioContextReady ? 'STANDBY' : 'CLICK TO INITIATE'}<span className="terminal-cursor">_</span>
+          </div>
         )}
         {txStats && (
           <div className="floating-stats-container">

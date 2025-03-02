@@ -403,6 +403,19 @@ textarea {
   z-index: 10; /* Ensure it shows above the scrolling content */
 }
 
+/* Blue styling for "Click to initiate" status */
+.status-indicator.audio-not-ready {
+  color: var(--secondary-accent);
+  border-color: var(--secondary-accent);
+  cursor: pointer;
+  animation: blink 1s infinite;
+}
+
+.status-indicator.audio-not-ready:hover {
+  background-color: rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+}
+
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
