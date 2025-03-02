@@ -9,12 +9,13 @@
       // Handle GitHub Pages path issues
       (function() {
         const { pathname } = window.location;
-        if (pathname.includes('/chirp') && !pathname.endsWith('/')) {
+        // For custom domain, we just need to ensure the path ends with a slash
+        if (pathname !== '/' && !pathname.endsWith('/')) {
           const hasQuery = window.location.search.length > 0;
           window.history.replaceState(
             {},
             '',
-            `/chirp/${hasQuery ? window.location.search : ''}`
+            `${pathname}/${hasQuery ? window.location.search : ''}`
           );
         }
       })();

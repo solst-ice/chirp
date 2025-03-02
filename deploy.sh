@@ -58,7 +58,7 @@ cat > dist/404.html << EOL
   <meta charset="utf-8">
   <title>Chirp - Redirecting</title>
   <script>
-    window.location.href = "/chirp/";
+    window.location.href = "/";
   </script>
 </head>
 <body>
@@ -76,5 +76,5 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-echo "Deployment complete! Your site should be available at https://solst-ice.github.io/chirp"
+echo "Deployment complete! Your site should be available at https://chirp.hex.dance"
 echo "Note: It may take a few minutes for GitHub Pages to update." 

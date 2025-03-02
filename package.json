@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build --base=/chirp/",
-    "preview": "vite preview --base=/chirp/",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -22,5 +23,5 @@
     "typescript": "^5.0.2",
     "vite": "^4.4.5"
   },
-  "homepage": "https://solst-ice.github.io/chirp"
+  "homepage": "https://chirp.hex.dance"
 }
