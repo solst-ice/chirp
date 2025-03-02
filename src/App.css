@@ -385,7 +385,7 @@ textarea {
   font-family: var(--mono-font);
 }
 
-/* Status indicator */
+/* Status indicator - position in the middle of the visualizer */
 .status-indicator {
   position: absolute;
   top: 50%;

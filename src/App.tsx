@@ -1348,6 +1348,9 @@ function App() {
         {!isListening && !systemInitialized && (
           <div className="status-indicator">SYSTEM INITIALIZING<span className="terminal-cursor">_</span></div>
         )}
+        {isListening && (
+          <div className="status-indicator">STANDBY<span className="terminal-cursor">_</span></div>
+        )}
         {txStats && (
           <div className="floating-stats-container">
             <div className="stats-label">TRANSMISSION DATA</div>
@@ -1377,7 +1380,7 @@ function App() {
             {/* All messages will be added here directly via DOM operations */}
           </div>
           
-          {isListening && <div className="status-indicator">STANDBY<span className="terminal-cursor">_</span></div>}
+          {/* Removed status indicator from here */}
         </div>
         
         <div className="transmit-container">
