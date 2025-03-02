@@ -476,17 +476,101 @@ textarea {
     font-size: 1.5rem;
   }
   
+  /* Mobile phone mode - stack containers vertically */
   .message-transmit-wrapper {
     flex-direction: column;
-    gap: 25px;
+    gap: 15px;
+    margin-top: 15px;
   }
   
+  /* Adjust container heights for mobile */
   .message-container {
     margin-bottom: 0;
+    height: 200px; /* Smaller height on mobile */
+    flex: none; /* Don't flex-grow on mobile */
+    width: 100%; /* Full width on mobile */
   }
   
   .transmit-container {
     margin-top: 0;
+    flex: none; /* Don't flex-grow on mobile */
+    width: 100%; /* Full width on mobile */
+  }
+  
+  /* Adjust visualizer height on mobile */
+  .visualizer-container {
+    margin-bottom: 15px;
+  }
+  
+  .frequency-visualizer {
+    height: 100px; /* Smaller height on mobile */
+  }
+  
+  /* Make font sizes more readable on mobile */
+  .sent-messages-container {
+    font-size: 0.9rem;
+  }
+  
+  textarea {
+    height: 80px; /* Smaller textarea on mobile */
+    font-size: 0.9rem;
+  }
+  
+  /* Adjust message line spacing for mobile */
+  .message-line {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+  }
+  
+  /* Adjust status indicator for mobile */
+  .status-indicator {
+    font-size: 0.8rem;
+    padding: 4px 8px;
+  }
+  
+  /* Make section titles more compact on mobile */
+  .section-title {
+    height: 25px;
+    font-size: 0.8rem;
+    line-height: 25px;
+  }
+}
+
+/* Small phones (iPhone SE, etc.) */
+@media (max-width: 375px) {
+  .app-container {
+    padding: 5px;
+  }
+  
+  .message-container {
+    height: 180px;
+    padding-top: 30px; /* Adjust for smaller title */
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  
+  .transmit-container {
+    padding-top: 30px; /* Adjust for smaller title */
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  
+  .message-transmit-wrapper {
+    gap: 10px;
+  }
+  
+  .section-title {
+    height: 22px;
+    font-size: 0.75rem;
+    line-height: 22px;
+  }
+  
+  .frequency-visualizer {
+    height: 80px;
+  }
+  
+  textarea {
+    height: 70px;
   }
 }
 
@@ -876,4 +960,41 @@ div[data-testid="message-display"] div.message-line:not(.sent-message):not(.stre
   padding: 2px 8px;
   margin-bottom: 4px;
   line-height: 1.2;
+}
+
+/* Additional mobile-specific styles that use the 'mobile' class */
+body.mobile {
+  /* Ensure no horizontal scrolling */
+  overflow-x: hidden;
+}
+
+body.mobile .app-container {
+  /* Optimized container for mobile */
+  padding: 10px;
+  min-height: calc(100vh - 20px); /* Account for padding */
+}
+
+body.mobile .message-transmit-wrapper {
+  /* Ensure vertical layout on mobile */
+  flex-direction: column !important;
+}
+
+body.mobile .floating-stats-container {
+  /* Make stats more compact on mobile */
+  top: 5px;
+  right: 5px;
+  font-size: 0.6rem;
+  max-width: 120px;
+}
+
+body.mobile .transmit-container button {
+  /* Make button more tappable on mobile */
+  padding: 12px 15px;
+  font-size: 0.9rem;
+}
+
+/* Ensure touch targets are large enough on mobile */
+body.mobile textarea,
+body.mobile button {
+  min-height: 44px; /* Apple's recommended minimum touch target size */
 }

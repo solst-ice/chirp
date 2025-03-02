@@ -355,6 +355,36 @@ function App() {
         
         // Create content with red border highlighting for received messages
         messageDiv.innerHTML = `<span>[${timestamp}] <strong class="received-indicator" style="color: var(--terminal-red); font-weight: bold;">[RECEIVED]</strong> <span>${message}</span></span>`;
+        
+        // Check for trigger words and automatically respond if not in streaming mode
+        if (!isStreamingMessage) {
+          setTimeout(() => {
+            // Extract plain message content without formatting - more thorough cleaning
+            let plainTextMessage = message.trim();
+            
+            // Remove timestamps [00:00:00] pattern
+            plainTextMessage = plainTextMessage.replace(/\[\d{2}:\d{2}:\d{2}\]/g, '');
+            
+            // Remove [RECEIVED] tag
+            plainTextMessage = plainTextMessage.replace(/\[RECEIVED\]/g, '');
+            
+            // Final cleanup of any remaining whitespace
+            plainTextMessage = plainTextMessage.trim();
+            
+            console.log("Checking for trigger in message:", plainTextMessage);
+            
+            if (plainTextMessage === "STARTDEMO") {
+              console.log("STARTDEMO detected - auto responding with HELLO! BOSS!");
+              autoRespondToMessage("HELLO! BOSS!");
+            } else if (plainTextMessage === "HELLO! BOSS!") {
+              console.log("HELLO! BOSS! detected - auto responding with WHOAMI");
+              autoRespondToMessage("WHOAMI");
+            } else if (plainTextMessage === "WHOAMI") {
+              console.log("WHOAMI detected - auto responding with SOLST/ICE");
+              autoRespondToMessage("SOLST/ICE");
+            }
+          }, 500); // Small delay to make it feel natural
+        }
       }
       
       // Insert at the top of the messages container
@@ -372,6 +402,44 @@ function App() {
     // Make clear button visible if it exists
     const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
     if (clearButton) clearButton.style.display = 'block';
+  };
+  
+  // Function to automatically respond to trigger messages
+  const autoRespondToMessage = (responseText: string) => {
+    console.log("Auto-responding with:", responseText);
+    
+    // Get the textarea element
+    const textarea = document.querySelector('.transmit-container textarea') as HTMLTextAreaElement;
+    if (!textarea) {
+      console.error("Couldn't find textarea element for auto-response");
+      return;
+    }
+    
+    // Set the response text
+    textarea.value = responseText;
+    
+    // Force trigger input event to update React state
+    const inputEvent = new Event('input', { bubbles: true });
+    textarea.dispatchEvent(inputEvent);
+    
+    // Set the input text state directly as well
+    setInputText(responseText);
+    
+    // Trigger the transmit function after a small delay
+    setTimeout(() => {
+      console.log("Auto-executing transmit for:", responseText);
+      
+      // Try to click the transmit button directly
+      const transmitButton = document.querySelector('.transmit-container button') as HTMLButtonElement;
+      if (transmitButton && !transmitButton.disabled) {
+        console.log("Clicking transmit button");
+        transmitButton.click();
+      } else {
+        // Fallback to calling the transmit function directly
+        console.log("Calling transmitMessage function directly");
+        transmitMessage();
+      }
+    }, 800); // Delay to make it look like someone is typing
   };
   
   // Generate mock frequency data for testing
@@ -1253,6 +1321,38 @@ function App() {
     
     // Clean up the interval on unmount
     return () => clearInterval(styleInterval);
+  }, []);
+  
+  // Function to detect mobile devices
+  const detectMobileDevice = () => {
+    const isMobile = window.matchMedia('(max-width: 768px)').matches || 
+                     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    if (isMobile) {
+      document.body.classList.add('mobile');
+    } else {
+      document.body.classList.remove('mobile');
+    }
+    
+    return isMobile;
+  };
+  
+  // Add useEffect to detect mobile devices on mount and window resize
+  useEffect(() => {
+    // Initial detection
+    detectMobileDevice();
+    
+    // Add resize listener
+    const handleResize = () => {
+      detectMobileDevice();
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
   
   return (
