@@ -186,21 +186,15 @@ button {
 
 /* Enhanced message display */
 .received-message {
-  height: calc(100% - 20px); /* Fill entire available height minus margins */
-  width: calc(100% - 2px); /* Fill entire width minus borders */
-  overflow-y: auto;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  margin: 10px 0;
-  font-family: var(--mono-font);
-  color: var(--text-color);
-  background-color: rgba(0, 0, 0, 0.6);
-  position: relative;
-  font-size: 0.9rem;
-  line-height: 1.4;
-  box-sizing: border-box;
-  display: block; /* Changed from flex to block */
-  white-space: pre-line; /* Preserves line breaks */
+  display: none;
+}
+
+.received-message::-webkit-scrollbar,
+.received-message::-webkit-scrollbar-track,
+.received-message::-webkit-scrollbar-thumb,
+.received-message::-webkit-scrollbar-thumb:hover,
+.received-message:empty::before {
+  display: none;
 }
 
 /* Scrollbar styling to make it more visible */
@@ -244,7 +238,7 @@ button {
   background-color: rgba(0, 0, 0, 0.2);
   padding: 8px;
   border-left: 3px solid var(--accent-color);
-  border-bottom: 1px solid rgba(255, 43, 109, 0.3);
+  border-bottom: none; /* Removed the red underline */
   transition: all 0.3s ease;
   position: relative;
   white-space: pre-wrap; /* Preserve whitespace and allow wrapping */
@@ -735,10 +729,21 @@ body:after {
 .sent-message {
   color: var(--terminal-green) !important;
   border-left: 4px solid var(--terminal-green);
-  background-color: rgba(0, 20, 0, 0.4);
+  background-color: transparent !important; /* Match parent background */
   padding: 2px 8px; /* Reduced padding */
   margin-left: -8px;
-  box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+  box-shadow: none; /* Remove box shadow */
+  line-height: 1.2; /* Tighter line height */
+}
+
+/* New styling for regular received messages to show them in red */
+.message-line:not(.sent-message):not(.streaming-message):not(.timeout-message) {
+  color: var(--text-color) !important;
+  border-left: 4px solid var(--terminal-red);
+  background-color: transparent !important; /* Match parent background */
+  padding: 2px 8px; /* Reduced padding */
+  margin-left: -8px;
+  box-shadow: none; /* Remove box shadow */
   line-height: 1.2; /* Tighter line height */
 }
 
@@ -781,299 +786,94 @@ div.message-line.sent-message > span {
 
 /* Adjust sent messages container for better compactness */
 .sent-messages-container {
-  max-height: 300px;
+  max-height: 280px; /* Full height of the message container */
   overflow-y: auto;
   padding: 10px;
   font-family: 'Unifont', monospace;
   width: 100%;
-  border-top: 1px solid rgba(0, 255, 65, 0.2);
-  margin-top: 10px;
+  border-top: none;
+  margin-top: 0;
 }
 
 .sent-messages-container .message-line {
   margin-bottom: 4px; /* Reduced margin */
   padding: 2px 8px; /* Reduced padding */
-  color: #00ff41 !important;
-  font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
+  box-shadow: none !important; /* Remove box shadow */
   line-height: 1.2; /* Tighter line height */
 }
 
-/* Make other message-line variants with [SENT] more compact as well */
-.message-line:has-text("[SENT]"),
-div.received-message div:has-text("[SENT]"),
-html body .app-container .message-container .received-message div:has-text("[SENT]") {
-  padding: 2px 8px; /* Reduced padding */
-  margin-bottom: 4px; /* Reduced margin */
-  line-height: 1.2; /* Tighter line height */
-}
-
-/* Ensure message content and timestamp are properly separated */
-.sent-message div, 
-.received-message div, 
-.streaming-message div, 
-.timeout-message div {
-  margin-bottom: 2px;
-}
-
-/* Direct green coloring for the timestamp in sent messages */
-.sent-message .timestamp {
-  color: var(--terminal-green) !important;
-  opacity: 0.8;
-}
-
-/* Add global style targeting any element that has '[SENT]' in its text content */
-[data-testid="message-display"] div:has-text("[SENT]") {
-  color: var(--terminal-green) !important;
-}
-
-/* Add a global style that applies directly to [SENT] text wherever it appears */
-strong.sent-indicator {
-  color: var(--terminal-green) !important;
-  font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-}
-
-/* Style any line with [SENT] in it, even in plain text mode */
-.received-message > div:not(.message-line) {
-  white-space: pre-line;
-}
-
-/* For the React state version - when using span instead of div */
-.sent-text {
-  color: var(--terminal-green);
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
-  font-weight: bold;
-}
-
-/* More forceful CSS targeting for sent messages */
-div[data-sent="true"],
-div[data-sent="true"] *,
-div.message-line.sent-message,
-div.message-line.sent-message *,
-div.sent-message,
-div.sent-message * {
-  color: var(--terminal-green) !important;
-}
-
-/* Hyper specific CSS selector targeting to override any other styles */
-div[data-testid="message-display"] div.message-line.sent-message,
-div[data-testid="message-display"] div.message-line.sent-message *,
-div[data-testid="message-display"] div[data-sent="true"],
-div[data-testid="message-display"] div[data-sent="true"] * {
-  color: var(--terminal-green) !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
-}
-
-/* Override for timestamps in sent messages */
-div.sent-message .timestamp,
-div.message-line.sent-message .timestamp {
-  color: var(--terminal-green) !important;
-  opacity: 0.8 !important;
-}
-
-/* MAXIMUM SPECIFICITY SENT MESSAGE STYLING */
-html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div[data-sent="true"],
-html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div.sent-message,
-html body div.app-container div.message-transmit-wrapper div.message-container div.received-message div.message-line.sent-message,
-html body div.app-container div[data-testid="message-display"] div.message-line.sent-message,
-html body div.app-container div[data-testid="message-display"] div[data-sent="true"],
-div[data-testid="message-display"] div:has(strong.sent-indicator),
-div[data-testid="message-display"] div:has([class*="sent"]) {
-  color: var(--terminal-green) !important;
-  border-left: 4px solid var(--terminal-green) !important;
-  background-color: rgba(0, 20, 0, 0.4) !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-}
-
-/* Target ALL elements within sent messages */
-html body div.app-container div[data-testid="message-display"] div.message-line.sent-message *,
-html body div.app-container div[data-testid="message-display"] div[data-sent="true"] *,
-div[data-testid="message-display"] div:has(strong.sent-indicator) *,
-div[data-testid="message-display"] div:has([class*="sent"]) * {
-  color: var(--terminal-green) !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-}
-
-/* Target timestamps specifically in sent messages */
-html body div.app-container div[data-testid="message-display"] div.message-line.sent-message .timestamp,
-html body div.app-container div[data-testid="message-display"] div[data-sent="true"] .timestamp,
-div[data-testid="message-display"] div:has(strong.sent-indicator) .timestamp,
-div[data-testid="message-display"] div:has([class*="sent"]) .timestamp {
-  color: var(--terminal-green) !important;
-  opacity: 0.8 !important;
-}
-
-/* Target any line containing [SENT] text regardless of structure */
-div[data-testid="message-display"] div:has-text("[SENT]"),
-div[data-testid="message-display"] div:has-text("[SENT]") * {
-  color: var(--terminal-green) !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-}
-
-/* Add a direct style for [SENT] text itself */
-strong.sent-indicator,
-span.sent-indicator {
-  color: var(--terminal-green) !important;
-  font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.5) !important;
-}
-
-/* Add support for inline styles */
-[style*="color: var(--terminal-green)"] {
-  color: var(--terminal-green) !important;
-}
-
-/* Target any element with inline sent color style */
-[style*="color: var(--terminal-green)"] *,
-[style*="color:#00ff41"] *,
-[style*="color: #00ff41"] * {
-  color: var(--terminal-green) !important;
-}
-
-/* HARDCODED PATTERN MATCH FOR [HH:MM:SS] [SENT] format */
-div[data-testid="message-display"] div:has(text("[SENT]")),
-div.received-message div:contains("[SENT]"),
-.message-line:has-text("[SENT]"),
-div.message-line:not(.streaming-message):not(.timeout-message):has(text("[SENT]")),
-.received-message > div:has-text("[SENT]") {
+/* Sent message styling (green) */
+.sent-messages-container .message-line.sent-message,
+.sent-messages-container .message-line[data-sent="true"] {
   color: #00ff41 !important;
   font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-  background-color: rgba(0, 20, 0, 0.4) !important;
   border-left: 4px solid #00ff41 !important;
+  background-color: transparent !important;
 }
 
-/* Target the DIRECT TEXT with exact pattern */
-.received-message div, 
-.message-line {
-  color: var(--text-color);
+/* Received message styling (red) */
+.sent-messages-container .message-line.received-message-box,
+.sent-messages-container .message-line[data-received="true"] {
+  color: var(--text-color) !important;
+  border-left: 4px solid var(--terminal-red) !important;
+  background-color: transparent !important;
 }
 
-/* But override for sent messages with exact color value */
-.received-message div:has-text("[SENT]"),
-.message-line:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Override for any text containing [SENT] */
-div.received-message *:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Force all text within the message to be green */
-.message-line:has-text("[SENT]") * {
-  color: #00ff41 !important;
-}
-
-/* Target direct text nodes using ::before hack - this applies color to text directly */
-div.received-message div:has-text("[SENT]")::before {
-  content: "";
-  display: inline;
-  color: #00ff41 !important;
-}
-
-/* Use direct child text node targeting */
-#message-display > div:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Direct color overrides for plain text */
-.received-message {
-  color: var(--text-color);
-}
-
-.received-message:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Use attribute selectors for catching text content */
-div[data-testid="message-display"] > div[class*="message-line"] {
-  color: var(--text-color);
-}
-
-div[data-testid="message-display"] > div:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Fallback for older browsers */
-.sent-message-fallback {
-  color: #00ff41 !important;
-  font-weight: bold;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
-}
-
-/* Most aggressive selector - override ALL existing styles */
-html body .app-container .message-container .received-message div.message-line:has-text("[SENT]"),
-html body .app-container .message-container .received-message div:has-text("[SENT]") {
-  color: #00ff41 !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-  border-left: 4px solid #00ff41 !important;
-}
-
-/* Target the surrounding text as well */
-html body .app-container .message-container .received-message div:has-text("[SENT]") * {
-  color: #00ff41 !important;
-}
-
-/* ULTRA-HARDCORE COLORIZING */
-.app-container *:not(style):not(script):not(link):not(meta) {
+/* Ensure all elements within received message boxes have the right color */
+.received-message-box * {
   color: var(--text-color) !important;
 }
 
-/* But then override for [SENT] with a harder !important */
-.app-container div:has-text("[SENT]"),
-.app-container *:has-text("[SENT]") {
-  color: #00ff41 !important;
-}
-
-/* Override again for any inner elements */
-.app-container div:has-text("[SENT]") *,
-.app-container *:has-text("[SENT]") * {
-  color: #00ff41 !important;
-}
-
-/* Target messages with text content matching pattern [HH:MM:SS] [SENT] directly using a custom attribute */
-#root .app-container div[data-testid="message-display"] div.message-line:not(.streaming-message):not(.timeout-message) {
-  position: relative;
-}
-
-/* Use attribute to mark and target any div with the specific pattern */
-#root .app-container div[data-testid="message-display"] div:has-text("\\[\\d{2}:\\d{2}:\\d{2}\\] \\[SENT\\]") {
-  color: #00ff41 !important;
-  font-weight: bold;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
-  border-left: 4px solid #00ff41 !important;
-}
-
-/* Add styles for sent messages container */
-.sent-messages-container {
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 10px;
-  font-family: 'Unifont', monospace;
-  width: 100%;
-  border-top: 1px solid rgba(0, 255, 65, 0.2);
-  margin-top: 10px;
-}
-
-.sent-messages-container .message-line {
-  margin-bottom: 8px;
-  color: #00ff41 !important;
-  font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-}
-
-/* Ensure all elements within sent messages have the right color */
-.sent-message * {
-  color: #00ff41 !important;
-}
-
-.sent-indicator {
-  color: #00ff41 !important;
+.received-indicator {
+  color: var(--terminal-red) !important;
   font-weight: bold !important;
 }
 
-.sent-text {
-  color: #00ff41 !important;
+/* HIGHEST PRIORITY SENT MESSAGE STYLING */
+.sent-message,
+[data-sent="true"],
+[class*="sent-indicator"],
+.sent-text,
+div:has([class*="sent-indicator"]),
+div:has(.sent-text) {
+  color: var(--terminal-green) !important;
+  /* Removed text-shadow */
+}
+
+/* Target specific elements with inline style */
+.message-line.sent-message,
+.message-line.sent-message *,
+.message-line[data-sent="true"],
+.message-line[data-sent="true"] * {
+  color: var(--terminal-green) !important;
+}
+
+/* Inline styles for maximum specificity */
+.sent-message,
+[data-sent="true"],
+[class*="sent-indicator"],
+.sent-text,
+div:has([class*="sent-indicator"]),
+div:has(.sent-text) {
+  color: var(--terminal-green) !important;
+  /* Removed text-shadow */
+}
+
+/* Target specific elements with inline style */
+.message-line.sent-message,
+.message-line.sent-message *,
+.message-line[data-sent="true"],
+.message-line[data-sent="true"] * {
+  color: var(--terminal-green) !important;
+}
+
+/* Add specific styling for regular received messages to make them red */
+.received-message div:not(.sent-message):not(.streaming-message):not(.timeout-message),
+div[data-testid="message-display"] div.message-line:not(.sent-message):not(.streaming-message):not(.timeout-message):not([data-sent="true"]):not(:has-text("[SENT]")) {
+  color: var(--text-color) !important;
+  border-left: 4px solid var(--terminal-red) !important;
+  background-color: transparent !important; /* Match parent background */
+  padding: 2px 8px;
+  margin-bottom: 4px;
+  line-height: 1.2;
 }

@@ -16,7 +16,6 @@ const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy5
 
 function App() {
   const [inputText, setInputText] = useState('');
-  const [receivedMessage, setReceivedMessage] = useState('');
   const [isListening, setIsListening] = useState(true);
   const [isTransmitting, setIsTransmitting] = useState(false);
   const [frequencies, setFrequencies] = useState<number[]>([]);
@@ -42,10 +41,8 @@ function App() {
   const lastReceivedTextRef = useRef<string | null>(null);
   const lastReceivedTimeRef = useRef<number>(0);
   const debugMsgCountRef = useRef<number>(0);
-  const [forceUpdate, setForceUpdate] = useState<number>(0);
   const visualizerUpdateCountRef = useRef<number>(0);
   const [directUI, setDirectUI] = useState<boolean>(true); // Enable direct UI updates
-  const messageDisplayRef = useRef<HTMLDivElement | null>(null);
   const [useMockData, setUseMockData] = useState<boolean>(false); // Add mock data option
   const [compatibilityMode, setCompatibilityMode] = useState<boolean>(true);
   const [sendTestMessages, setSendTestMessages] = useState<boolean>(false);
@@ -124,7 +121,6 @@ function App() {
       div:has([class*="sent-indicator"]),
       div:has(.sent-text) {
         color: var(--terminal-green) !important;
-        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
       }
       
       /* Target specific elements with inline style */
@@ -151,7 +147,6 @@ function App() {
       div:has([class*="sent-indicator"]),
       div:has(.sent-text) {
         color: var(--terminal-green) !important;
-        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
       }
       
       /* Target specific elements with inline style */
@@ -217,7 +212,6 @@ function App() {
     // Reset decoder when we start listening
     if (isListening) {
       resetDecoder();
-      setReceivedMessage(''); // Clear the message display
       receivedMessagesRef.current.clear(); // Clear the received messages set
       lastReceivedTextRef.current = null;
       lastReceivedTimeRef.current = 0;
@@ -291,135 +285,93 @@ function App() {
     // Check if this is a sent message
     const isSentMessage = message.includes('[SENT]');
     
-    // For sent messages, use a completely separate DOM element that won't get overwritten
-    if (isSentMessage && sentMessagesContainerRef.current) {
-      console.log('Adding message to SENT messages container to prevent overwriting');
+    // Add all messages to the sent messages container
+    if (sentMessagesContainerRef.current) {
+      console.log('Adding message to messages container');
       
-      // Create a div for the sent message with inline styles
-      const sentMessageDiv = document.createElement('div');
-      sentMessageDiv.classList.add('message-line', 'sent-message');
-      sentMessageDiv.setAttribute('data-sent', 'true');
-      sentMessageDiv.setAttribute('data-permanent-sent', 'true');
+      // Create a div for the message with inline styles
+      const messageDiv = document.createElement('div');
+      messageDiv.classList.add('message-line');
       
-      // Apply all styles inline for maximum resilience
-      sentMessageDiv.style.color = '#00ff41';
-      sentMessageDiv.style.fontWeight = 'bold';
-      sentMessageDiv.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
-      sentMessageDiv.style.borderLeft = '4px solid #00ff41';
-      sentMessageDiv.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
-      sentMessageDiv.style.marginBottom = '8px';
-      sentMessageDiv.style.padding = '4px 8px';
-      
-      // Extract the message content after [SENT]
-      let cleanMessage = message;
-      if (message.startsWith('[SENT]:')) {
-        cleanMessage = message.replace('[SENT]:', '').trim();
-      } else if (message.startsWith('[SENT]')) {
-        cleanMessage = message.replace('[SENT]', '').trim();
-      }
-      
-      // Create content with green color applied to every element
-      sentMessageDiv.innerHTML = `<span style="color: #00ff41;">[${timestamp}] <strong class="sent-indicator" style="color: #00ff41; font-weight: bold;">[SENT]</strong> <span class="sent-text" style="color: #00ff41;">${cleanMessage}</span></span>`;
-      
-      // Insert at the top of the sent messages container
-      if (sentMessagesContainerRef.current.firstChild) {
-        sentMessagesContainerRef.current.insertBefore(sentMessageDiv, sentMessagesContainerRef.current.firstChild);
-      } else {
-        sentMessagesContainerRef.current.appendChild(sentMessageDiv);
-      }
-      
-      console.log('Added sent message to isolated container', sentMessageDiv);
-      
-      // Skip the normal message flow for sent messages
-      return;
-    }
-    
-    // Always create a consistent format with visible timestamp
-    let formattedMessage = '';
-    
-    // Handle streaming message - use a special class for in-progress messages
-    if (isStreamingMessage) {
-      // FIXED: Allow special characters in streaming messages by only filtering control chars
-      const cleanedMessage = message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-      formattedMessage = `<div class="message-line streaming-message">[${timestamp}] ${cleanedMessage}<span class="terminal-cursor">_</span></div>`;
-    } 
-    // Handle timeout messages with special formatting
-    else if (message.includes("(timeout)")) {
-      // Highlight timeout messages differently
-      formattedMessage = `<div class="message-line timeout-message">[${timestamp}] ${message}</div>`;
-    }
-    // Standard message format
-    else {
-      formattedMessage = `<div class="message-line">[${timestamp}] ${message}</div>`;
-    }
-    
-    // Log the HTML being inserted
-    console.log('Inserting formatted message:', formattedMessage);
-    
-    // Direct DOM update - much more reliable than React state for this case
-    if (messageDisplayRef.current) {
-      console.log('messageDisplayRef is valid, updating DOM');
-      
-      // Handle streaming updates differently
-      if (isStreamingMessage) {
-        // If there's an existing streaming message, update it instead of adding a new one
-        const existingStreamingMessage = messageDisplayRef.current.querySelector('.streaming-message');
-        if (existingStreamingMessage) {
-          console.log('Updating existing streaming message');
-          // Strip the wrapping div but preserve the newline
-          existingStreamingMessage.innerHTML = formattedMessage.replace('<div class="message-line streaming-message">', '').replace('</div>', '');
-          
-          // Force DOM refresh by triggering a reflow
-          const forceReflow = messageDisplayRef.current.offsetHeight;
-          
-          // Set scrollTop to 0 to ensure the newest messages are visible
-          messageDisplayRef.current.scrollTop = 0;
-          return; // Don't add a new message line
+      if (isSentMessage) {
+        // Sent message styling (green)
+        messageDiv.classList.add('sent-message');
+        messageDiv.setAttribute('data-sent', 'true');
+        messageDiv.setAttribute('data-permanent-sent', 'true');
+        
+        // Apply all styles inline for maximum resilience
+        messageDiv.style.color = '#00ff41';
+        messageDiv.style.fontWeight = 'bold';
+        messageDiv.style.borderLeft = '4px solid #00ff41';
+        messageDiv.style.backgroundColor = 'transparent';
+        messageDiv.style.marginBottom = '8px';
+        messageDiv.style.padding = '4px 8px';
+        
+        // Extract the message content after [SENT]
+        let cleanMessage = message;
+        if (message.startsWith('[SENT]:')) {
+          cleanMessage = message.replace('[SENT]:', '').trim();
+        } else if (message.startsWith('[SENT]')) {
+          cleanMessage = message.replace('[SENT]', '').trim();
         }
-      }
-      
-      // Clear placeholder text if this is the first message
-      if (messageDisplayRef.current.innerText === 'No messages received yet.' || 
-          messageDisplayRef.current.innerText === 'NO INCOMING TRANSMISSION DETECTED...\n_ ' ||
-          messageDisplayRef.current.innerHTML.trim() === '') {
-        console.log('Clearing placeholder text');
-        messageDisplayRef.current.innerHTML = formattedMessage;
+        
+        // Create content with green color applied to every element
+        messageDiv.innerHTML = `<span style="color: #00ff41;">[${timestamp}] <strong class="sent-indicator" style="color: #00ff41; font-weight: bold;">[SENT]</strong> <span class="sent-text" style="color: #00ff41;">${cleanMessage}</span></span>`;
+      } else if (isStreamingMessage) {
+        // Streaming message styling
+        messageDiv.classList.add('streaming-message');
+        
+        // Apply streaming message styles
+        messageDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+        messageDiv.style.borderLeft = '4px solid #0084ff';
+        messageDiv.style.padding = '6px 8px';
+        messageDiv.style.animation = 'pulse 1.5s infinite alternate';
+        
+        // FIXED: Allow special characters in streaming messages by only filtering control chars
+        const cleanedMessage = message.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+        messageDiv.innerHTML = `<span>[${timestamp}] ${cleanedMessage}<span class="terminal-cursor">_</span></span>`;
+      } else if (message.includes("(timeout)")) {
+        // Timeout message styling
+        messageDiv.classList.add('timeout-message');
+        
+        // Apply timeout styles
+        messageDiv.style.backgroundColor = 'rgba(30, 0, 0, 0.6)';
+        messageDiv.style.borderLeft = '4px solid #ff3300';
+        messageDiv.style.padding = '6px 8px';
+        
+        messageDiv.innerHTML = `<span>[${timestamp}] ${message}</span>`;
       } else {
-        // Add the new message to the top
-        messageDisplayRef.current.innerHTML = formattedMessage + messageDisplayRef.current.innerHTML;
+        // Received message styling (red)
+        messageDiv.classList.add('received-message-box');
+        messageDiv.setAttribute('data-received', 'true');
+        
+        // Apply all styles inline for maximum resilience - using red for received messages
+        messageDiv.style.color = 'var(--text-color)';
+        messageDiv.style.fontWeight = 'normal';
+        messageDiv.style.borderLeft = '4px solid var(--terminal-red)';
+        messageDiv.style.backgroundColor = 'transparent';
+        messageDiv.style.marginBottom = '8px';
+        messageDiv.style.padding = '4px 8px';
+        
+        // Create content with red border highlighting for received messages
+        messageDiv.innerHTML = `<span>[${timestamp}] <strong class="received-indicator" style="color: var(--terminal-red); font-weight: bold;">[RECEIVED]</strong> <span>${message}</span></span>`;
       }
       
-      // Make clear button visible if it exists
-      const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
-      if (clearButton) clearButton.style.display = 'block';
+      // Insert at the top of the messages container
+      if (sentMessagesContainerRef.current.firstChild) {
+        sentMessagesContainerRef.current.insertBefore(messageDiv, sentMessagesContainerRef.current.firstChild);
+      } else {
+        sentMessagesContainerRef.current.appendChild(messageDiv);
+      }
       
-      // Force DOM refresh by triggering a reflow
-      const forceReflow = messageDisplayRef.current.offsetHeight;
-      
-      // Always scroll to top after adding a new message
-      messageDisplayRef.current.scrollTop = 0;
+      console.log(`Added ${isSentMessage ? 'sent' : 'received'} message to messages container`, messageDiv);
     } else {
-      console.warn('messageDisplayRef.current is null - cannot update DOM directly');
+      console.warn('sentMessagesContainerRef.current is null - cannot update DOM directly');
     }
     
-    // Skip React state update for sent messages
-    if (isSentMessage) {
-      console.log('Skipping React state update for [SENT] message to prevent style overrides');
-      return;
-    }
-    
-    // For non-SENT messages, update React state as a backup 
-    setReceivedMessage(prevMessage => {
-      // Just use plain text for the React state without HTML tags
-      // Add a definite newline between messages
-      const newMessage = `[${timestamp}] ${message}\n\n${prevMessage || ''}`;
-      // Force a UI refresh immediately
-      setTimeout(() => setForceUpdate(prev => prev + 1), 10);
-      return newMessage;
-    });
-    
-    // Update ref tracking for the last received message
-    lastReceivedTextRef.current = message;
+    // Make clear button visible if it exists
+    const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
+    if (clearButton) clearButton.style.display = 'block';
   };
   
   // Generate mock frequency data for testing
@@ -509,9 +461,8 @@ function App() {
       
       // Force UI update every 30 frames
       if (debugMsgCountRef.current % 30 === 0) {
-        setForceUpdate(prev => prev + 1);
+        debugMsgCountRef.current++;
       }
-      debugMsgCountRef.current++;
       
       // Continue the animation loop
       animationFrameRef.current = requestAnimationFrame(updateFrequencies);
@@ -585,7 +536,7 @@ function App() {
 
       // Force update on UI regardless
       if (debugMsgCountRef.current % 30 === 0) {
-        setForceUpdate(prev => prev + 1);
+        debugMsgCountRef.current++;
       }
       
       // CRITICAL CHECK: Do not attempt to decode audio if transmitting
@@ -639,7 +590,7 @@ function App() {
                 setDebugText(`Streaming: ${currentStreamingText.current}`);
                 
                 // Force render update immediately
-                setForceUpdate(prev => prev + 1);
+                debugMsgCountRef.current++;
               }
             }
             // Handle streaming end - may also contain the full validated message
@@ -1005,7 +956,7 @@ function App() {
       setDebugText('Audio initialized (click Start Listening to begin)');
       
       // Show initial "RECEIVING DATA..." message only if it hasn't been shown already
-      if (!initialMessageShown && messageDisplayRef.current) {
+      if (!initialMessageShown) {
         addReceivedMessage("RECEIVING DATA...", true);
         setInitialMessageShown(true);
       }
@@ -1017,25 +968,14 @@ function App() {
   
   // Function to clear received messages with direct DOM access
   const clearMessages = () => {
-    // Update React state
-    setReceivedMessage('');
-    receivedMessagesRef.current.clear();
+    // Remove setReceivedMessage call
+    // setReceivedMessage(''); // Clear the message display
+    receivedMessagesRef.current.clear(); // Clear the received messages set
     
-    // Direct DOM update
-    if (messageDisplayRef.current) {
-      messageDisplayRef.current.innerHTML = ''; // Use empty string to trigger the :empty pseudo-selector
-    }
-    
-    // Also clear sent messages container
+    // Clear the sent messages container
     if (sentMessagesContainerRef.current) {
       sentMessagesContainerRef.current.innerHTML = '';
     }
-    
-    // Hide the clear button
-    const clearButton = document.querySelector('.clear-button') as HTMLButtonElement;
-    if (clearButton) clearButton.style.display = 'none';
-    
-    setDebugText('Messages cleared');
   };
   
   // Toggle debug mode
@@ -1061,12 +1001,27 @@ function App() {
   
   // Ensure messageDisplayRef is correctly initialized in useEffect
   useEffect(() => {
-    // Log when the ref is connected to ensure it's properly set up
-    if (messageDisplayRef.current) {
-      console.log('Message display ref initialized correctly');
-    } else {
-      console.warn('Message display ref is not connected to DOM element');
+    // Check if we need to initialize message containers
+    const initialMessageShown = sessionStorage.getItem('initialMessageShown') === 'true';
+    
+    // Show initial message if it's the first time
+    if (!initialMessageShown) {
+      addReceivedMessage("RECEIVING DATA...", true);
+      sessionStorage.setItem('initialMessageShown', 'true');
     }
+    
+    // Clear any existing messages when the component mounts
+    // Remove messageDisplayRef reference
+    // if (messageDisplayRef.current) {
+    //   messageDisplayRef.current.innerHTML = ''; // Use empty string to trigger the :empty pseudo-selector
+    // }
+    
+    // Clear sent messages container
+    if (sentMessagesContainerRef.current) {
+      sentMessagesContainerRef.current.innerHTML = '';
+    }
+    
+    // ... existing code ...
   }, []);
   
   // Add useEffect to set the favicon when component mounts
@@ -1108,7 +1063,6 @@ function App() {
       .message-line:has-text("[SENT]") {
         color: #00ff41 !important;
         font-weight: bold !important;
-        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
         border-left: 4px solid #00ff41 !important;
         background-color: rgba(0, 20, 0, 0.4) !important;
       }
@@ -1142,7 +1096,6 @@ function App() {
                 if (element) {
                   element.style.color = '#00ff41';
                   element.style.fontWeight = 'bold';
-                  element.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
                   element.style.borderLeft = '4px solid #00ff41';
                   element.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
                   element.classList.add('sent-message');
@@ -1163,9 +1116,9 @@ function App() {
     };
     
     // Create and start the observer if we have a valid message display ref
-    if (messageDisplayRef.current) {
+    if (sentMessagesContainerRef.current) {
       const observer = new MutationObserver(handleMutation);
-      observer.observe(messageDisplayRef.current, { 
+      observer.observe(sentMessagesContainerRef.current, { 
         childList: true, 
         subtree: true,
         characterData: true,
@@ -1190,7 +1143,6 @@ function App() {
       .sent-message-direct {
         color: #00ff41 !important;
         font-weight: bold !important;
-        text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
         border-left: 4px solid #00ff41 !important;
         background-color: rgba(0, 20, 0, 0.4) !important;
         padding-left: 8px !important;
@@ -1273,48 +1225,21 @@ function App() {
     // Function to ensure all sent messages are green
     const maintainSentMessageStyles = () => {
       // First look for messages with the data-permanent-sent attribute
-      if (messageDisplayRef.current) {
-        const sentMessages = messageDisplayRef.current.querySelectorAll('[data-permanent-sent="true"]');
-        sentMessages.forEach(element => {
-          if (element instanceof HTMLElement) {
+      if (sentMessagesContainerRef.current) {
+        const sentMessages = sentMessagesContainerRef.current.querySelectorAll('[data-permanent-sent="true"], .sent-message');
+        sentMessages.forEach(msg => {
+          if (msg instanceof HTMLElement) {
             // Re-apply all the necessary styles
-            element.style.color = '#00ff41';
-            element.style.fontWeight = 'bold';
-            element.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
-            element.style.borderLeft = '4px solid #00ff41';
-            element.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
+            msg.style.color = '#00ff41';
+            msg.style.fontWeight = 'bold';
             
             // Apply styles to all child elements
-            const children = element.querySelectorAll('*');
+            const children = msg.querySelectorAll('*');
             children.forEach(child => {
               if (child instanceof HTMLElement) {
                 child.style.color = '#00ff41';
               }
             });
-          }
-        });
-        
-        // Next, look for any content with [SENT] text
-        const allMessageLines = messageDisplayRef.current.querySelectorAll('.message-line');
-        allMessageLines.forEach(line => {
-          if (line.textContent && line.textContent.includes('[SENT]')) {
-            if (line instanceof HTMLElement) {
-              // Apply styles to this element if it contains [SENT]
-              line.style.color = '#00ff41';
-              line.style.fontWeight = 'bold';
-              line.style.textShadow = '0 0 5px rgba(0, 255, 65, 0.3)';
-              line.style.borderLeft = '4px solid #00ff41';
-              line.style.backgroundColor = 'rgba(0, 20, 0, 0.4)';
-              line.setAttribute('data-permanent-sent', 'true');
-              
-              // Apply styles to all child elements
-              const children = line.querySelectorAll('*');
-              children.forEach(child => {
-                if (child instanceof HTMLElement) {
-                  child.style.color = '#00ff41';
-                }
-              });
-            }
           }
         });
       }
@@ -1378,10 +1303,8 @@ function App() {
       
       {/* Debug container is hidden with CSS */}
       {debugMode && (
-        <div className="debug-container" key={`debug-${forceUpdate}`}>
+        <div className="debug-container" key={`debug-${debugMsgCountRef.current}`}>
           <div className="debug-info">{debugText}</div>
-          <div className="debug-info">Message state: {receivedMessage ? `"${receivedMessage}"` : "empty"}</div>
-          <div className="debug-info">Frequencies: {frequencies.length > 0 ? `${frequencies.length} values, max=${Math.max(...frequencies)}` : "none"}</div>
           <div className="debug-info">AnimFrame: {animationFrameRef.current ? "active" : "none"}</div>
           <div className="debug-info">Modes: {[
             useMockData ? "MOCK DATA" : "REAL MIC",
@@ -1419,7 +1342,7 @@ function App() {
         <div className="section-title">&gt; FREQUENCY ANALYSIS</div>
         <FrequencyVisualizer 
           frequencies={frequencies} 
-          key={`viz-${forceUpdate % 10}`}
+          key={`viz-${debugMsgCountRef.current % 10}`}
           transmitMode={transmitVisualization} // Pass prop to indicate transmission visualization
         />
         {!isListening && !systemInitialized && (
@@ -1443,23 +1366,15 @@ function App() {
       <div className="message-transmit-wrapper">
         <div className="message-container">
           <div className="section-title">&gt; INCOMING TRANSMISSION</div>
-          <div 
-            className="received-message" 
-            key={`msg-${forceUpdate}`}
-            ref={messageDisplayRef}
-            data-testid="message-display" // Add test ID for easy DOM selection
-          >
-            {receivedMessage || 'NO INCOMING TRANSMISSION DETECTED...\n_ '}
-          </div>
           
-          {/* Add a completely separate container for sent messages that won't be affected by React updates */}
+          {/* Only keep the sent-messages-container */}
           <div 
             className="sent-messages-container"
             ref={sentMessagesContainerRef}
             data-testid="sent-messages-container"
             style={{ marginTop: '10px' }}
           >
-            {/* Sent messages will be added here directly via DOM operations */}
+            {/* All messages will be added here directly via DOM operations */}
           </div>
           
           {isListening && <div className="status-indicator">STANDBY<span className="terminal-cursor">_</span></div>}
