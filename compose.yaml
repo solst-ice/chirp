@@ -1,0 +1,5 @@
+services:
+  chirp:
+    build: .
+    ports:
+      - "5173:5173"
