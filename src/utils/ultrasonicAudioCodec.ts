@@ -1,4 +1,4 @@
-// src/utils/audioCodec.ts
+// src/utils/ultrasonicAudioCodec.ts
 //
 // This middleware replicates the original audioCodec.ts API for the top‑level app,
 // but under the hood it now uses our new ultrasonic communication implementation.
@@ -61,9 +61,16 @@ export const encodeText = (text: string): void => {
  *
  * @param callback - Function that receives the decoded message.
  */
-export const decodeAudio = (callback: (msg: string) => void): void => {
-  console.log("Setting up decoder callback");
-  ultrasonic.on("message", callback);
+export const decodeAudio = (callback?: (msg: string) => void): void => {
+  // Ensure the callback is a function; if not, default to a no-op.
+  const cb =
+    typeof callback === "function"
+      ? callback
+      : () => {
+          console.warn("decodeAudio: Provided callback was not a function. Using default no-op.");
+        };
+  console.log("ultrasonicAudioCodec: setting up decoder callback.");
+  ultrasonic.on("message", cb);
 };
 
 /**
