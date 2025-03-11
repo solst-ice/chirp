@@ -6,7 +6,7 @@ import {
   decodeAudio, 
   resetDecoder, 
   MAXIMUM_VALID_FREQUENCY 
-} from './utils/audioCodec';
+} from './utils/ultrasonicAudioCodec';
 
 // Add a console log to confirm the component is loading
 console.log('Chirp system initializing');
