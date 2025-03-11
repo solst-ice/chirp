@@ -5,7 +5,6 @@
 // The exported constants have been updated to reflect the ultrasonic frequency range.
 
 import ultrasonic from "./ultrasonic"; // our high-level ultrasonic service wrapper
-import EventEmitter from "eventemitter3";
 
 // Updated constants for the ultrasonic implementation.
 export const START_FREQUENCY = 18000; // Hz - default carrier frequency for channel 1

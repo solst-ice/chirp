@@ -1,4 +1,4 @@
-// src/utils/transmitter.js
+// src/utils/transmitter.ts
 
 import Zlib from "zlib";
 import Speaker from "speaker";

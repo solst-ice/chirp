@@ -1,31 +1,25 @@
-// src/utils/main.js
+// src/utils/main.ts
+import ultrasonic from "./ultrasonic";
+import { Buffer } from 'buffer';
+(window as any).Buffer = Buffer;
 
-import { negotiateParameters } from "./handshake";
-import { sendMessage } from "./transmitter";
-import { startReceiver, setSymbolDuration } from "./receiver";
-import { candidateList } from "./ultrasonic";
+console.log("Starting Ultrasonic Service...");
 
-// Mode: "tx", "rx", or "both" (default is "rx").
-const mode = process.argv[2] || "rx";
+// Start the ultrasonic service (which starts the receiver)
+ultrasonic.start();
 
-if (mode === "rx" || mode === "both") {
-  startReceiver(() => {});
-}
+// Listen for incoming messages and log them
+ultrasonic.on("message", (message: string) => {
+  console.log("Received message:", message);
+});
 
-if (mode === "tx" || mode === "both") {
-  // Define a simple sendFunction for handshake negotiation.
-  const sendFunction = (msg: string) => {
-    sendMessage(msg, candidateList[0]); // initial candidate used for handshake PRE
-  };
+// Send a test message after 3 seconds
+setTimeout(() => {
+  console.log("Sending test message...");
+  ultrasonic.send("Hello, robust ultrasonic world!");
+}, 3000);
 
-  (async () => {
-    const negotiatedBitDuration = await negotiateParameters(sendFunction, candidateList, 2000, 3);
-    console.log("Negotiated bit duration:", negotiatedBitDuration);
-    // Update the receiver (if running in 'both' mode) with the negotiated duration.
-    setSymbolDuration(negotiatedBitDuration);
-    // Delay briefly to allow the handshake to settle.
-    setTimeout(() => {
-      sendMessage("Hello, robust ultrasonic world!", negotiatedBitDuration);
-    }, 3000);
-  })();
-}
+// Optional: Stop the ultrasonic service when the window is about to unload
+window.addEventListener("beforeunload", () => {
+  ultrasonic.stop();
+});

@@ -1,4 +1,4 @@
-// src/utils/ultrasonic.js
+// src/utils/ultrasonic.ts
 //
 // High-level wrapper for ultrasonic communication.
 // Exposes start(), send(), and stop() endpoints, and emits a "message" event when a new message is received.

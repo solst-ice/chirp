@@ -1,4 +1,4 @@
-// src/utils/handshake.js
+// src/utils/handshake.ts
 
 import EventEmitter from "eventemitter3";
 const handshakeEmitter = new EventEmitter();

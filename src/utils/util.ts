@@ -1,4 +1,4 @@
-// src/utils/util.js
+// src/utils/util.ts
 // Utility functions for converting between buffers and bit arrays
 
 export function bufferToBits(buffer: any) {

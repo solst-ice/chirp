@@ -1,4 +1,4 @@
-// src/utils/modulation.js
+// src/utils/modulation.ts
 
 // QPSK modulation mapping: convert 2 bits into a phase.
 // Mapping: 00 -> π/4, 01 -> 3π/4, 11 -> 5π/4, 10 -> 7π/4.

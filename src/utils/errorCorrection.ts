@@ -1,4 +1,4 @@
-// src/utils/errorCorrection.js
+// src/utils/errorCorrection.ts
 
 import { bufferToBits, bitsToBuffer } from "./util";
 
