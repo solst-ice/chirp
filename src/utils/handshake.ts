@@ -1,6 +1,6 @@
 // src/utils/handshake.js
 
-import { EventEmitter } from 'events';
+import EventEmitter from "eventemitter3";
 const handshakeEmitter = new EventEmitter();
 
 /**
@@ -8,7 +8,7 @@ const handshakeEmitter = new EventEmitter();
  * Sends a handshake message with a given subtype ("PRE", "ACK", or "READY")
  * and a candidate object that includes parameters like bitDuration, compression, frequency, etc.
  */
-function sendHandshakeMessage(sendFunction: (arg0: string) => void, subtype: string, candidate: {} | undefined, handshakeId: string) {
+export function sendHandshakeMessage(sendFunction: (arg0: string) => void, subtype: string, candidate: {} | undefined, handshakeId: string) {
   const messageObj = {
     type: "HANDSHAKE",
     subtype: subtype,
@@ -24,7 +24,7 @@ function sendHandshakeMessage(sendFunction: (arg0: string) => void, subtype: str
  * Processes an incoming handshake message. For "PRE" messages, it immediately replies with an "ACK".
  * For "ACK" messages, it emits the candidate via an event.
  */
-function handleIncomingHandshake(messageStr: string, sendFunction: (arg0: string) => void) {
+export function handleIncomingHandshake(messageStr: string, sendFunction: (arg0: string) => void) {
   try {
     let msg = JSON.parse(messageStr);
     if (msg.type === "HANDSHAKE") {
@@ -50,7 +50,7 @@ function handleIncomingHandshake(messageStr: string, sendFunction: (arg0: string
  * For the transmitter, iterates over a list of candidate parameter sets (objects) with retries and timeouts.
  * Returns the candidate object that was agreed upon.
  */
-async function negotiateParameters(sendFunction: { (arg0: string): void; (arg0: string): void; }, candidateList: string | any[], waitTime = 2000, retries = 3) {
+export async function negotiateParameters(sendFunction: { (arg0: string): void; (arg0: string): void; }, candidateList: string | any[], waitTime = 2000, retries = 3) {
   for (let candidate of candidateList) {
     for (let attempt = 0; attempt < retries; attempt++) {
       const handshakeId = Date.now() + "-" + Math.random();
@@ -79,10 +79,3 @@ async function negotiateParameters(sendFunction: { (arg0: string): void; (arg0: 
   console.log("Handshake negotiation failed for all candidates. Using default candidate.");
   return candidateList[candidateList.length - 1];
 }
-
-module.exports = {
-  sendHandshakeMessage,
-  handleIncomingHandshake,
-  negotiateParameters,
-  handshakeEmitter,
-};

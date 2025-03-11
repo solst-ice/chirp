@@ -12,6 +12,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "eventemitter3": "^5.0.1",
     "mic": "^2.1.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

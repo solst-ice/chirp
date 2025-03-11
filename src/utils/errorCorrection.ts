@@ -2,7 +2,7 @@
 
 import { bufferToBits, bitsToBuffer } from "./util";
 
-function hammingEncodeBuffer(buffer: any) {
+export function hammingEncodeBuffer(buffer: any) {
   let bits = bufferToBits(buffer);
   let encodedBits = [];
   // Process bits in groups of 4
@@ -26,7 +26,7 @@ function hammingEncodeBuffer(buffer: any) {
   return bitsToBuffer(encodedBits);
 }
 
-function hammingDecodeBuffer(buffer: any) {
+export function hammingDecodeBuffer(buffer: any) {
   let bits = bufferToBits(buffer);
   let decodedBits = [];
   // Process bits in groups of 7
@@ -47,8 +47,3 @@ function hammingDecodeBuffer(buffer: any) {
   }
   return bitsToBuffer(decodedBits);
 }
-
-module.exports = {
-  hammingEncodeBuffer,
-  hammingDecodeBuffer,
-};

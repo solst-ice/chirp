@@ -18,6 +18,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
+      'speaker': resolve(__dirname, 'src/utils/browserSpeaker.ts'),
     },
   },
 })

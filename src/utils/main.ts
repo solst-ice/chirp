@@ -1,15 +1,15 @@
 // src/utils/main.js
 
-const { negotiateBitDuration } = require("./handshake");
+import { negotiateParameters } from "./handshake";
 import { sendMessage } from "./transmitter";
-const { startReceiver, setSymbolDuration } = require("./receiver");
+import { startReceiver, setSymbolDuration } from "./receiver";
 import { candidateList } from "./ultrasonic";
 
 // Mode: "tx", "rx", or "both" (default is "rx").
 const mode = process.argv[2] || "rx";
 
 if (mode === "rx" || mode === "both") {
-  startReceiver();
+  startReceiver(() => {});
 }
 
 if (mode === "tx" || mode === "both") {
@@ -19,7 +19,7 @@ if (mode === "tx" || mode === "both") {
   };
 
   (async () => {
-    const negotiatedBitDuration = await negotiateBitDuration(sendFunction, candidateList, 2000, 3);
+    const negotiatedBitDuration = await negotiateParameters(sendFunction, candidateList, 2000, 3);
     console.log("Negotiated bit duration:", negotiatedBitDuration);
     // Update the receiver (if running in 'both' mode) with the negotiated duration.
     setSymbolDuration(negotiatedBitDuration);

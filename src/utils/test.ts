@@ -1,4 +1,4 @@
-const ultrasonic = require('./utils/ultrasonic');
+import ultrasonic from './ultrasonic';
 
 ultrasonic.on('message', (msg) => {
   console.log("Received message:", msg);

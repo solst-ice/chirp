@@ -84,9 +84,9 @@ export function demodulateQPSKChannel(pcmBuffer: Buffer<ArrayBuffer>, carrierFre
 }
 
 // Multiplexing: interleave bytes into two channels.
-export function multiplexEncode(buffer: string | any[]) {
-  let ch1 = [];
-  let ch2 = [];
+export function multiplexEncode(buffer: Uint8Array): { channel1: Buffer; channel2: Buffer } {
+  const ch1: number[] = [];
+  const ch2: number[] = [];
   for (let i = 0; i < buffer.length; i++) {
     if (i % 2 === 0) ch1.push(buffer[i]);
     else ch2.push(buffer[i]);
@@ -108,10 +108,3 @@ export function multiplexDecode(ch1: string | any[], ch2: string | any[]) {
   }
   return Buffer.from(out);
 }
-
-module.exports = {
-  modulateQPSKChannel,
-  demodulateQPSKChannel,
-  multiplexEncode,
-  multiplexDecode,
-};

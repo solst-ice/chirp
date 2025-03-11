@@ -1,10 +1,10 @@
 // src/utils/transmitter.js
 
-const zlib = require("zlib");
-const Speaker = require("speaker");
-const { hammingEncodeBuffer } = require("./errorCorrection");
-const { multiplexEncode, modulateQPSKChannel } = require("./modulation");
-const { bufferToBits } = require("./util");
+import Zlib from "zlib";
+import Speaker from "speaker";
+import { hammingEncodeBuffer } from "./errorCorrection";
+import { multiplexEncode, modulateQPSKChannel } from "./modulation";
+import { bufferToBits } from "./util";
 
 const sampleRate = 44100;
 const channels = 1;
@@ -31,7 +31,7 @@ function floatToPCM16Buffer(floatArray: string | any[] | Float32Array<ArrayBuffe
 export function sendMessage(message: string, candidate: { bitDuration: number; frequency: { ch1: number; ch2: number } }) {
   console.log("=== TRANSMITTER PIPELINE ===");
   // 1. Compress the message using the candidate's compression type (only 'zlib' supported for now).
-  const compressed = zlib.deflateSync(message);
+  const compressed = Zlib.deflateSync(message);
   console.log("Compressed length:", compressed.length);
   // 2. Error correction: Hamming encode.
   const eccEncoded = hammingEncodeBuffer(compressed);
@@ -56,17 +56,8 @@ export function sendMessage(message: string, candidate: { bitDuration: number; f
   // 7. Convert to 16‑bit PCM Buffer.
   const pcmBuffer = floatToPCM16Buffer(combined);
   // 8. Output via speakers.
-  const speaker = new Speaker({
-    channels: channels,
-    bitDepth: bitDepth,
-    sampleRate: sampleRate,
-  });
-  console.log(`Transmitting message with candidate: ${JSON.stringify(candidate)}`);
+  const speaker = new Speaker({ sampleRate: 44100, channels: 1, bitDepth: 16 });
   speaker.write(pcmBuffer, () => {
     console.log("Transmission complete.");
   });
 }
-
-module.exports = {
-  sendMessage,
-};

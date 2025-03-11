@@ -3,10 +3,10 @@
 // High-level wrapper for ultrasonic communication.
 // Exposes start(), send(), and stop() endpoints, and emits a "message" event when a new message is received.
 
-const EventEmitter = require("events");
-const { sendMessage } = require("./transmitter");
-const { startReceiver, stopReceiver, setParameters } = require("./receiver");
-const { negotiateParameters } = require("./handshake");
+import EventEmitter from "eventemitter3";
+import { sendMessage } from "./transmitter";
+import { startReceiver, stopReceiver, setParameters } from "./receiver";
+import { negotiateParameters } from "./handshake";
 
 // Candidate parameter sets (each is a candidate object).
 // You can extend these objects to include additional parameters if needed.
@@ -18,6 +18,8 @@ export const candidateList = [
 ];
 
 class UltrasonicService extends EventEmitter {
+  currentCandidate: { bitDuration: number; compression: string; frequency: { ch1: number; ch2: number; }; errorCorrection: string; };
+  receiverRunning: boolean;
   constructor() {
     super();
     // Default to the slowest candidate initially.
@@ -78,5 +80,4 @@ class UltrasonicService extends EventEmitter {
   }
 }
 
-module.exports = new UltrasonicService();
 export default new UltrasonicService();

@@ -22,8 +22,3 @@ export function bitsToBuffer(bits: string | any[]) {
   }
   return Buffer.from(bytes);
 }
-
-module.exports = {
-  bufferToBits,
-  bitsToBuffer,
-};
