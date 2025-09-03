@@ -23,13 +23,32 @@ This application allows you to transmit and receive data through sound. It uses 
 - Node.js (version 14 or higher)
 - npm or yarn
 
+
 ### Installation
 
-1. Clone this repository
-2. Install dependencies:
+#### Clone this repository  
+
+First, assuming you have the github CLI, use this command while in your end directory:
+
+   ```bash
+   gh repo clone solst-ice/chirp
+   ```
+
+Otherwise use your terminal to go to your end directory & enter:
+
+   ```bash
+   git clone https://github.com/solst-ice/chirp.git
+   ```
+
+#### Install dependencies
+
    ```bash
    npm install
-   # or
+   ```
+
+   **or**
+
+   ```bash
    yarn
    ```
 
@@ -37,7 +56,9 @@ This application allows you to transmit and receive data through sound. It uses 
 
 ```bash
 npm run dev
-# or
+```
+**or**
+```bash
 yarn dev
 ```
 
