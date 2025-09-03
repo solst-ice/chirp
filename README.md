@@ -28,13 +28,13 @@ This application allows you to transmit and receive data through sound. It uses 
 
 #### Clone this repository  
 
-First, assuming you have the github CLI, use this command while in your end directory:
+First—assuming you have the GitHub CLI—use this command while in your end directory:
 
    ```bash
    gh repo clone solst-ice/chirp
    ```
 
-Otherwise use your terminal to go to your end directory & enter:
+Otherwise use this command while in your end directory:
 
    ```bash
    git clone https://github.com/solst-ice/chirp.git
