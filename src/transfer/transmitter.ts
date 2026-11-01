@@ -6,6 +6,10 @@
 // Each job carries the modem it was prepared for, so changing the mode while a
 // job is being prepared or played cannot mix modes. Before talking it waits for
 // any frame currently being received to finish (listen before talk).
+//
+// Progress follows the audio clock, so it stops if the output is suspended.
+// The app cancels with reason 'interrupted' when that happens: resuming
+// mid-frame after a gap would not keep the receiver's timing.
 
 import type { Frame, Modem } from '../modem/types.ts';
 
@@ -43,14 +47,19 @@ export interface TxJob {
   monitor?: boolean;
 }
 
+/** 'user': the user cancelled or backed out. 'interrupted': audio stopped underneath us. */
+export type CancelReason = 'user' | 'interrupted';
+
 export type TxOutcome =
   | { status: 'sent'; duration: number }
-  | { status: 'cancelled' }
+  | { status: 'cancelled'; reason: CancelReason }
   | { status: 'busy' }
   | { status: 'failed'; error: Error };
 
 export interface TransmitterDeps {
   sampleRate(): number;
+  /** Seconds on the clock that drives playback (the AudioContext's currentTime). */
+  clock(): number;
   play(samples: Float32Array): Playback;
   /** True while a frame from another device is being received. */
   channelBusy(): boolean;
@@ -65,19 +74,26 @@ export interface TransmitterDeps {
 export const airtimeOf = (modem: Modem, frames: Frame[]) =>
   frames.reduce((t, f) => t + modem.airtime(f.payload.length), 0) + (Math.max(0, frames.length - 1) * FRAME_GAP_MS) / 1000;
 
+// Both helpers remove their abort listener when they settle normally, so a
+// long job does not accumulate one per frame.
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
+    const onAbort = () => {
       clearTimeout(t);
       resolve();
-    }, { once: true });
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 
 const untilDoneOrAborted = (done: Promise<void>, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
-    signal.addEventListener('abort', () => resolve(), { once: true });
-    done.then(resolve, reject);
+    const onAbort = () => resolve();
+    signal.addEventListener('abort', onAbort, { once: true });
+    done.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 
 export class Transmitter {
@@ -92,8 +108,8 @@ export class Transmitter {
     return this.active !== null;
   }
 
-  cancel() {
-    this.active?.abort();
+  cancel(reason: CancelReason = 'user') {
+    this.active?.abort(reason);
   }
 
   /**
@@ -111,11 +127,12 @@ export class Transmitter {
     const { signal } = controller;
     let audioStarted = false;
     let monitor = false;
+    const cancelled = (): TxOutcome => ({ status: 'cancelled', reason: signal.reason === 'interrupted' ? 'interrupted' : 'user' });
 
     try {
       this.deps.onState({ kind: 'preparing', label });
       const job = await prepare(signal);
-      if (!job || signal.aborted) return { status: 'cancelled' };
+      if (!job || signal.aborted) return cancelled();
       const { modem, frames } = job;
       monitor = job.monitor ?? false;
       const rate = this.deps.sampleRate();
@@ -126,13 +143,13 @@ export class Transmitter {
         this.deps.onState({ kind: 'waiting', label, modem: modem.label });
         await sleep(CHANNEL_POLL_MS, signal);
       }
-      if (signal.aborted) return { status: 'cancelled' };
+      if (signal.aborted) return cancelled();
 
       const total = airtimeOf(modem, frames);
-      const started = performance.now();
+      const started = this.deps.clock();
       let sent = 0;
       const report = () => {
-        const elapsed = (performance.now() - started) / 1000;
+        const elapsed = this.deps.clock() - started;
         const state: SendingState = {
           kind: 'sending',
           label,
@@ -165,10 +182,10 @@ export class Transmitter {
       } finally {
         clearInterval(timer);
       }
-      if (signal.aborted) return { status: 'cancelled' };
-      return { status: 'sent', duration: (performance.now() - started) / 1000 };
+      if (signal.aborted) return cancelled();
+      return { status: 'sent', duration: this.deps.clock() - started };
     } catch (err) {
-      if (signal.aborted) return { status: 'cancelled' };
+      if (signal.aborted) return cancelled();
       return { status: 'failed', error: err instanceof Error ? err : new Error(String(err)) };
     } finally {
       try {

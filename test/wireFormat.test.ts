@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 import { crc32 } from '../src/modem/crc32.ts';
+import { buildFileFrames } from '../src/modem/fileTransfer.ts';
 import { frameBytes, frameTones } from '../src/modem/mfsk.ts';
 import { PROFILES } from '../src/modem/profiles.ts';
 import { rsEncode } from '../src/modem/reedSolomon.ts';
@@ -60,4 +61,28 @@ describe('known-answer vectors', () => {
       assert.equal(createHash('sha256').update(JSON.stringify(tones)).digest('hex').slice(0, 16), g.tonesSha256);
     });
   }
+
+  test('file manifest (version 2) and chunk headers are unchanged', () => {
+    const { frames } = buildFileFrames({
+      fileId: 0xc0ffee01,
+      name: 'a✓.txt',
+      mime: 'text/plain',
+      size: 40,
+      data: new TextEncoder().encode('chirp chirp chirp '),
+      compressed: true,
+      chunkSize: 16,
+    });
+    // Manifest: version | id | chunk count | chunk size | data size | CRC-32 | flags | original size | name | mime.
+    const manifest = '02' + 'c0ffee01' + '0002' + '0010' + '00000012' + 'ebeb6baa' + '01' + '00000028' + '08' + '61e29c932e747874' + '0a' + '746578742f706c61696e';
+    // Chunk: id | index | data.
+    assert.deepEqual(
+      frames.map((f) => [f.type, hex(f.payload)]),
+      [
+        [FrameType.FileManifest, manifest],
+        [FrameType.FileChunk, 'c0ffee01' + '0000' + '63686972702063686972702063686972'],
+        [FrameType.FileChunk, 'c0ffee01' + '0001' + '7020'],
+        [FrameType.FileManifest, manifest],
+      ],
+    );
+  });
 });

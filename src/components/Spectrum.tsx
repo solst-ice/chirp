@@ -80,7 +80,7 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       ctx.font = FONT;
       cw = Math.max(6, Math.round(ctx.measureText('█').width)) || 8;
       cols = Math.max(GUTTER + 20, Math.floor(wrap.clientWidth / cw));
-      const compact = cols < 70;
+      const compact = cols < 70 || window.innerHeight < 760;
       specRows = compact ? 7 : 10;
       waterRows = compact ? 5 : 8;
       plot = cols - GUTTER;
@@ -248,6 +248,8 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
     const ro = new ResizeObserver(() => {
       layout();
     });
+    // Height alone (e.g. rotating a phone) can change the density without resizing the canvas's box.
+    window.addEventListener('resize', layout);
     // Measure with the bitmap font once it is available.
     (document.fonts?.load(FONT) ?? Promise.resolve()).catch(() => undefined).then(start);
     ro.observe(wrap);
@@ -256,6 +258,7 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       stopped = true;
       cancelAnimationFrame(frame);
       ro.disconnect();
+      window.removeEventListener('resize', layout);
     };
   }, [analyser, sampleRate, maxFrequency]);
 

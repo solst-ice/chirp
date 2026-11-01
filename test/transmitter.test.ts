@@ -7,7 +7,7 @@ import { Transmitter, type TransmitterDeps, type TxState } from '../src/transfer
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const text = (s: string): Frame => ({ type: FrameType.Text, payload: new TextEncoder().encode(s) });
 
-function harness(opts: { playMs?: number; channelBusyFor?: number } = {}) {
+function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () => number } = {}) {
   let playing = 0;
   const log = {
     maxConcurrent: 0,
@@ -16,10 +16,12 @@ function harness(opts: { playMs?: number; channelBusyFor?: number } = {}) {
     before: 0,
     after: 0,
     states: [] as TxState['kind'][],
+    progress: [] as number[],
   };
   const busyUntil = Date.now() + (opts.channelBusyFor ?? 0);
   const deps: TransmitterDeps = {
     sampleRate: () => 48000,
+    clock: opts.clock ?? (() => performance.now() / 1000),
     play(samples) {
       playing++;
       log.maxConcurrent = Math.max(log.maxConcurrent, playing);
@@ -34,7 +36,10 @@ function harness(opts: { playMs?: number; channelBusyFor?: number } = {}) {
     channelBusy: () => Date.now() < busyUntil,
     beforeAudio: () => void log.before++,
     afterAudio: async () => void log.after++,
-    onState: (s) => log.states.push(s.kind),
+    onState: (s) => {
+      log.states.push(s.kind);
+      if (s.kind === 'sending') log.progress.push(s.progress);
+    },
   };
   return { tx: new Transmitter(deps), log };
 }
@@ -68,7 +73,7 @@ describe('transmitter', () => {
     const run = tx.run('file', job(getModem('fast'), [text('a'), text('b'), text('c')]));
     await delay(50);
     tx.cancel();
-    assert.deepEqual(await run, { status: 'cancelled' });
+    assert.deepEqual(await run, { status: 'cancelled', reason: 'user' });
     assert.equal(log.played.length, 1);
     assert.equal(log.stopped, 1);
     assert.equal(log.after, 1);
@@ -80,7 +85,7 @@ describe('transmitter', () => {
     const { tx, log } = harness();
     const run = tx.run('file', job(getModem('fast'), [text('a')], 50));
     tx.cancel();
-    assert.deepEqual(await run, { status: 'cancelled' });
+    assert.deepEqual(await run, { status: 'cancelled', reason: 'user' });
     assert.equal(log.played.length + log.before + log.after, 0);
   });
 
@@ -104,6 +109,24 @@ describe('transmitter', () => {
 
   test('backing out of a job reports cancelled', async () => {
     const { tx } = harness();
-    assert.deepEqual(await tx.run('a', async () => null), { status: 'cancelled' });
+    assert.deepEqual(await tx.run('a', async () => null), { status: 'cancelled', reason: 'user' });
+  });
+
+  test('an audio interruption cancels with its own reason', async () => {
+    const { tx, log } = harness({ playMs: 1000 });
+    const run = tx.run('file', job(getModem('fast'), [text('a'), text('b')]));
+    await delay(50);
+    tx.cancel('interrupted');
+    assert.deepEqual(await run, { status: 'cancelled', reason: 'interrupted' });
+    assert.equal(log.stopped, 1);
+    assert.equal(tx.busy, false);
+  });
+
+  test('progress follows the audio clock, not wall time', async () => {
+    // A suspended context: its clock does not advance.
+    const { tx, log } = harness({ playMs: 400, clock: () => 12.5 });
+    await tx.run('a', job(getModem('fast'), [text('x')]));
+    assert.ok(log.progress.length >= 3);
+    assert.ok(log.progress.every((p) => p === 0), String(log.progress));
   });
 });

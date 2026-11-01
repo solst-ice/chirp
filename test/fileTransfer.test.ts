@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
+  DEFAULT_LIMITS,
   FileAssembler,
   MAX_FILE_BYTES,
   buildFileFrames,
@@ -149,12 +150,79 @@ describe('file transfer', () => {
   }
 
   test('keeps a bounded number of incomplete transfers', () => {
-    const a = new FileAssembler({ maxBytes: MAX_FILE_BYTES, maxChunkSize: 1018, maxPending: 3 });
+    const a = new FileAssembler({ maxPending: 3 });
     const transfers = [1, 2, 3, 4].map((id) => buildFileFrames({ ...options(bytes(150, id)), fileId: id }).frames);
     for (const frames of transfers) a.accept(frames[1]); // one orphan chunk each
     // Transfer 1 was evicted, so its manifest finds no chunks; transfer 4 kept its chunk.
     assert.equal(a.accept(transfers[0][0])?.received, 0);
     assert.equal(a.accept(transfers[3][0])?.received, 1);
   });
-});
 
+  const orphan = (fileId: number, index: number, length: number) => {
+    const payload = new Uint8Array(6 + length);
+    new DataView(payload.buffer).setUint32(0, fileId);
+    new DataView(payload.buffer).setUint16(4, index);
+    return { type: FrameType.FileChunk, payload };
+  };
+
+  test('chunks without a manifest cannot buffer more than the largest valid file', () => {
+    // The review's reproduction: 300 × 1018-byte chunks for one id, no manifest.
+    const a = new FileAssembler();
+    for (let i = 0; i < 300; i++) a.accept(orphan(42, i, 1018));
+    assert.ok(a.bufferedBytes <= MAX_FILE_BYTES, `${a.bufferedBytes} bytes buffered`);
+    // Indexes no valid file can have, and id 0, are refused outright.
+    assert.equal(a.accept(orphan(43, 0xffff, 100)), null);
+    assert.equal(a.accept(orphan(0, 0, 100)), null);
+  });
+
+  test('tiny orphan chunks are capped by count, not just bytes', () => {
+    const a = new FileAssembler({ maxBytes: 1024 });
+    for (let i = 0; i < 500; i++) a.accept(orphan(7, i, 0));
+    // A 1 KB file has at most 1024 / 16 = 64 chunks.
+    assert.equal(a.accept(orphan(7, 1, 0))?.received, 64);
+  });
+
+  test('a maximum-size file still completes when all its chunks precede the manifest', () => {
+    const data = bytes(MAX_FILE_BYTES, 11);
+    const { frames } = buildFileFrames({ ...options(data), chunkSize: 1018 });
+    const a = new FileAssembler();
+    for (const f of frames.slice(1, -1)) assert.equal(a.accept(f)?.data, undefined);
+    assert.equal(a.bufferedBytes, MAX_FILE_BYTES);
+    assert.deepEqual(a.accept(frames[0])?.data, data);
+    assert.equal(a.bufferedBytes, 0);
+  });
+
+  test('evicts the stalest transfer to stay within the shared byte budget', () => {
+    const a = new FileAssembler({ maxBuffered: 4000 });
+    a.accept(orphan(1, 0, 1000));
+    a.accept(orphan(1, 1, 1000));
+    a.accept(orphan(2, 0, 1000));
+    a.accept(orphan(1, 2, 500)); // transfer 1 is now the most recently active
+    const result = a.accept(orphan(3, 0, 1000))!;
+    assert.deepEqual(result.evicted, [2]);
+    assert.equal(a.isPending(1), true);
+    assert.equal(a.bufferedBytes, 3500);
+  });
+
+  test('expires transfers that stop arriving and reclaims their budget', () => {
+    const a = new FileAssembler();
+    const { frames } = buildFileFrames(options(bytes(500, 12)));
+    a.accept(frames[1], 0);
+    a.accept(frames[2], 1000);
+    assert.deepEqual(a.expire(DEFAULT_LIMITS.pendingTtlMs), []);
+    assert.deepEqual(a.expire(1000 + DEFAULT_LIMITS.pendingTtlMs), [4242]);
+    assert.equal(a.bufferedBytes, 0);
+    assert.equal(a.isPending(4242), false);
+  });
+
+  test('a manifest that changes how the data is interpreted restarts the transfer', () => {
+    const data = bytes(300, 13);
+    const { manifest, frames } = buildFileFrames(options(data));
+    const a = new FileAssembler();
+    a.accept(frames[0]);
+    a.accept(frames[1]);
+    const recompressed = encodeManifest({ ...manifest, compressed: true, size: 5000 });
+    assert.equal(a.accept({ type: FrameType.FileManifest, payload: recompressed })?.received, 0);
+    assert.equal(a.bufferedBytes, 0);
+  });
+});

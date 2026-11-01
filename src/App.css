@@ -62,7 +62,10 @@
 }
 
 .topbar .state {
+  min-width: 0;
+  max-width: 100%;
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ── panels: single-line boxes with the title set into the top border ── */
@@ -70,12 +73,17 @@
 .screen {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  grid-template-areas:
-    'spec spec'
-    'log  tx'
-    'log  link';
   gap: calc(var(--cell) * 1.5) 2ch;
   padding-top: 8px;
+}
+
+/* Wide screens: what you receive on the left, what you send on the right, so
+   the composer is at the top of the page rather than below the spectrum. */
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--cell) * 1.5);
+  min-width: 0;
 }
 
 .p-spectrum {
@@ -136,6 +144,22 @@
   color: var(--accent);
 }
 
+/* Transmitting is what every visit is for, so its panel stands out even when
+   nothing in it has focus. */
+.p-tx {
+  border-color: var(--dim);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.p-tx .panel-title,
+.p-tx .panel-name {
+  color: var(--accent);
+}
+
+.p-tx .prompt {
+  border-style: solid;
+}
+
 .panel-right {
   color: var(--dim);
   overflow: hidden;
@@ -158,10 +182,11 @@
 
 .p-log {
   display: flex;
+  flex: 1;
   flex-direction: column;
 }
 
-/* Fills whatever height the transmit + link column gives the row. */
+/* Fills whatever height the transmit + link column leaves below the spectrum. */
 .log {
   flex: 1 1 0;
   min-height: calc(var(--cell) * 16);
@@ -302,6 +327,15 @@
 .mode-hint {
   color: var(--dim);
   min-height: calc(var(--cell) * 2);
+}
+
+.mode-hint-rate {
+  display: none;
+}
+
+.tx-hint {
+  margin-top: 4px;
+  color: var(--warn);
 }
 
 .prompt {
@@ -494,6 +528,20 @@ details > summary:focus-visible {
     grid-template-areas: 'spec' 'tx' 'log' 'link';
   }
 
+  .col {
+    display: contents;
+  }
+
+  /* Status and CANCEL / START AUDIO stay reachable while scrolling. */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: -8px 0 0;
+    padding: max(8px, env(safe-area-inset-top)) 0 4px;
+    background: var(--bg);
+  }
+
   .log {
     flex: none;
     height: calc(var(--cell) * 16);
@@ -538,6 +586,43 @@ details > summary:focus-visible {
   }
 }
 
+/* Narrow or short screens: modes become one row of segments, saving two rows
+   of 44 px touch targets above the composer. */
+@media (max-width: 760px), (max-height: 500px) {
+  .modes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 4px;
+  }
+
+  .mode-row {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    border: 1px solid var(--line);
+  }
+
+  .mode-row.active {
+    border-color: var(--rx);
+  }
+
+  .mode-radio,
+  .mode-band,
+  .mode-rate,
+  .mode-key {
+    display: none;
+  }
+
+  .mode-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mode-hint-rate {
+    display: inline;
+  }
+}
+
 /* Touch: full-size targets, keeping the bracketed terminal labels. */
 @media (pointer: coarse) {
   .mode-row,
@@ -546,10 +631,16 @@ details > summary:focus-visible {
     min-height: 44px;
   }
 
-  .mode-row,
-  details > summary {
+  .mode-row {
     display: grid;
     align-items: center;
+  }
+
+  /* Flex, not grid: the ▸ marker must stay on the summary's line. */
+  details > summary {
+    display: flex;
+    align-items: center;
+    gap: 1ch;
   }
 
   .btn {
@@ -576,6 +667,7 @@ details > summary:focus-visible {
 @media (hover: none) {
   .hotkeys,
   .hotkey-hint,
+  .key-hint,
   .mode-key {
     display: none;
   }

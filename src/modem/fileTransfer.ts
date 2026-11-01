@@ -27,6 +27,8 @@ export interface FileManifest {
 
 export interface FileProgress {
   fileId: number;
+  /** Other incomplete transfers dropped to stay within the receive budget. */
+  evicted?: number[];
   manifest?: FileManifest;
   received: number;
   /** Known once the manifest arrives. */
@@ -45,15 +47,23 @@ export interface FileLimits {
   maxChunkSize: number;
   /** Incomplete transfers kept at once; the oldest is dropped beyond this. */
   maxPending: number;
+  /** Chunk bytes buffered across all incomplete transfers; the oldest are dropped beyond this. */
+  maxBuffered: number;
+  /** An incomplete transfer that receives nothing for this long is dropped. */
+  pendingTtlMs: number;
 }
 
 export const MAX_FILE_BYTES = 256 * 1024;
 export const CHUNK_HEADER = 6;
+/** Smallest chunk size a sender uses (see `chunkSizeFor`); bounds how many chunks a file can have. */
+export const MIN_CHUNK_SIZE = 16;
 
 export const DEFAULT_LIMITS: FileLimits = {
   maxBytes: MAX_FILE_BYTES,
   maxChunkSize: 1024 - CHUNK_HEADER,
   maxPending: 8,
+  maxBuffered: 4 * MAX_FILE_BYTES,
+  pendingTtlMs: 10 * 60_000,
 };
 
 const MANIFEST_VERSION = 2;
@@ -126,7 +136,7 @@ export function decodeManifest(b: Uint8Array, limits: FileLimits = DEFAULT_LIMIT
   if (flags & ~KNOWN_FLAGS) return null;
   if (m.fileId === 0) return null;
   if (m.size > limits.maxBytes || m.dataSize > limits.maxBytes) return null;
-  if (m.chunkSize < 1 || m.chunkSize > limits.maxChunkSize) return null;
+  if (m.chunkSize < MIN_CHUNK_SIZE || m.chunkSize > limits.maxChunkSize) return null;
   if (m.chunkCount !== Math.max(1, Math.ceil(m.dataSize / m.chunkSize))) return null;
   if (!m.compressed && m.size !== m.dataSize) return null;
   return m;
@@ -179,29 +189,68 @@ export function buildFileFrames(o: FileFramesOptions): { manifest: FileManifest;
 interface Pending {
   manifest?: FileManifest;
   chunks: Map<number, Uint8Array>;
+  /** Sum of buffered chunk lengths. */
+  bytes: number;
+  lastSeen: number;
 }
 
+/** Same file, interpreted the same way: chunks gathered under one can complete the other. */
 const sameTransfer = (a: FileManifest, b: FileManifest) =>
-  a.crc === b.crc && a.dataSize === b.dataSize && a.chunkSize === b.chunkSize && a.chunkCount === b.chunkCount;
+  a.crc === b.crc &&
+  a.dataSize === b.dataSize &&
+  a.chunkSize === b.chunkSize &&
+  a.chunkCount === b.chunkCount &&
+  a.compressed === b.compressed &&
+  a.size === b.size;
 
-/** Collects manifest and chunk frames, possibly out of order or repeated. */
+/**
+ * Collects manifest and chunk frames, possibly out of order or repeated.
+ *
+ * Chunks may arrive before their manifest (it is sent first and last), so
+ * orphan chunks are buffered too, within the same budgets: no more bytes or
+ * chunks than the largest valid file, a cap on buffered bytes across all
+ * transfers, a cap on transfers, and expiry of transfers that went quiet.
+ */
 export class FileAssembler {
   private readonly limits: FileLimits;
   private pending = new Map<number, Pending>();
   /** Delivered transfers: id → manifest, kept so repeats are recognised. */
   private delivered = new Map<number, FileManifest>();
+  private buffered = 0;
 
-  constructor(limits: FileLimits = DEFAULT_LIMITS) {
-    this.limits = limits;
+  constructor(limits: Partial<FileLimits> = {}) {
+    this.limits = { ...DEFAULT_LIMITS, ...limits };
   }
 
-  accept(frame: Frame): FileProgress | null {
-    if (frame.type === FrameType.FileManifest) return this.acceptManifest(frame.payload);
-    if (frame.type === FrameType.FileChunk) return this.acceptChunk(frame.payload);
+  /** Chunk bytes currently held for incomplete transfers. */
+  get bufferedBytes(): number {
+    return this.buffered;
+  }
+
+  /** Whether a transfer is still being assembled. */
+  isPending(fileId: number): boolean {
+    return this.pending.has(fileId);
+  }
+
+  accept(frame: Frame, now = Date.now()): FileProgress | null {
+    if (frame.type === FrameType.FileManifest) return this.acceptManifest(frame.payload, now);
+    if (frame.type === FrameType.FileChunk) return this.acceptChunk(frame.payload, now);
     return null;
   }
 
-  private acceptManifest(payload: Uint8Array): FileProgress | null {
+  /** Drop incomplete transfers that have received nothing for `pendingTtlMs`; returns their ids. */
+  expire(now = Date.now()): number[] {
+    const expired: number[] = [];
+    for (const [fileId, f] of this.pending) {
+      if (now - f.lastSeen >= this.limits.pendingTtlMs) {
+        this.drop(fileId);
+        expired.push(fileId);
+      }
+    }
+    return expired;
+  }
+
+  private acceptManifest(payload: Uint8Array, now: number): FileProgress | null {
     const manifest = decodeManifest(payload, this.limits);
     if (!manifest) {
       const id = payload.length >= 5 ? new DataView(payload.buffer, payload.byteOffset).getUint32(1) : 0;
@@ -213,42 +262,107 @@ export class FileAssembler {
       if (sameTransfer(done, manifest)) return { fileId, manifest, received: done.chunkCount, total: done.chunkCount, alreadyDelivered: true };
       this.delivered.delete(fileId); // A different file under a reused id: start over.
     }
-    const f = this.entry(fileId);
-    if (f.manifest && !sameTransfer(f.manifest, manifest)) f.chunks.clear();
+    const evicted: number[] = [];
+    const f = this.entry(fileId, now, evicted);
+    if (f.manifest && !sameTransfer(f.manifest, manifest)) this.clearChunks(f);
     f.manifest = manifest;
     // Drop chunks that arrived before the manifest but do not fit it.
     for (const [i, chunk] of f.chunks) {
-      if (i >= manifest.chunkCount || chunk.length !== expectedChunkLength(manifest, i)) f.chunks.delete(i);
+      if (i >= manifest.chunkCount || chunk.length !== expectedChunkLength(manifest, i)) this.removeChunk(f, i);
     }
-    return this.progress(fileId, f);
+    return this.withEvicted(this.progress(fileId, f), evicted);
   }
 
-  private acceptChunk(payload: Uint8Array): FileProgress | null {
+  private acceptChunk(payload: Uint8Array, now: number): FileProgress | null {
     if (payload.length < CHUNK_HEADER || payload.length - CHUNK_HEADER > this.limits.maxChunkSize) return null;
     const v = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
     const fileId = v.getUint32(0);
     const index = v.getUint16(4);
+    if (fileId === 0 || index >= this.maxChunks) return null;
     const done = this.delivered.get(fileId);
     if (done) return { fileId, manifest: done, received: done.chunkCount, total: done.chunkCount, alreadyDelivered: true };
-    const f = this.entry(fileId);
-    const chunk = payload.slice(CHUNK_HEADER);
-    if (f.manifest && (index >= f.manifest.chunkCount || chunk.length !== expectedChunkLength(f.manifest, index))) {
-      return this.status(fileId, f); // Does not fit the announced file; ignore it.
+    const length = payload.length - CHUNK_HEADER;
+    const known = this.pending.get(fileId);
+    if (known?.manifest && (index >= known.manifest.chunkCount || length !== expectedChunkLength(known.manifest, index))) {
+      known.lastSeen = now;
+      return this.status(fileId, known); // Does not fit the announced file; ignore it.
     }
-    f.chunks.set(index, chunk);
-    return this.progress(fileId, f);
-  }
-
-  private entry(fileId: number): Pending {
-    let f = this.pending.get(fileId);
-    if (!f) {
-      f = { chunks: new Map() };
-      this.pending.set(fileId, f);
-      while (this.pending.size > this.limits.maxPending) {
-        this.pending.delete(this.pending.keys().next().value!);
+    if (known && !known.manifest) {
+      // No manifest yet: hold no more than the largest valid file would need.
+      const replaced = known.chunks.get(index)?.length ?? 0;
+      const fresh = !known.chunks.has(index);
+      if (known.bytes - replaced + length > this.limits.maxBytes || (fresh && known.chunks.size >= this.maxChunks)) {
+        return this.status(fileId, known); // More than any valid file: ignore it.
       }
     }
+    const evicted: number[] = [];
+    const f = this.entry(fileId, now, evicted);
+    this.removeChunk(f, index);
+    this.makeRoom(length, fileId, evicted);
+    f.chunks.set(index, payload.slice(CHUNK_HEADER));
+    f.bytes += length;
+    this.buffered += length;
+    return this.withEvicted(this.progress(fileId, f), evicted);
+  }
+
+  /** Most chunks a valid file can have. */
+  private get maxChunks(): number {
+    return Math.max(1, Math.ceil(this.limits.maxBytes / MIN_CHUNK_SIZE));
+  }
+
+  private entry(fileId: number, now: number, evicted: number[]): Pending {
+    let f = this.pending.get(fileId);
+    if (f) {
+      // Most recently active last, so eviction takes the stalest transfer.
+      this.pending.delete(fileId);
+      this.pending.set(fileId, f);
+    } else {
+      f = { chunks: new Map(), bytes: 0, lastSeen: now };
+      this.pending.set(fileId, f);
+      while (this.pending.size > this.limits.maxPending) this.evictOldest(fileId, evicted);
+    }
+    f.lastSeen = now;
     return f;
+  }
+
+  /** Evict the stalest other transfers until `length` more bytes fit the shared budget. */
+  private makeRoom(length: number, keep: number, evicted: number[]) {
+    while (this.buffered + length > this.limits.maxBuffered && this.evictOldest(keep, evicted));
+  }
+
+  private evictOldest(keep: number, evicted: number[]): boolean {
+    for (const fileId of this.pending.keys()) {
+      if (fileId === keep) continue;
+      this.drop(fileId);
+      evicted.push(fileId);
+      return true;
+    }
+    return false;
+  }
+
+  private drop(fileId: number) {
+    const f = this.pending.get(fileId);
+    if (!f) return;
+    this.buffered -= f.bytes;
+    this.pending.delete(fileId);
+  }
+
+  private removeChunk(f: Pending, index: number) {
+    const chunk = f.chunks.get(index);
+    if (!chunk) return;
+    f.chunks.delete(index);
+    f.bytes -= chunk.length;
+    this.buffered -= chunk.length;
+  }
+
+  private clearChunks(f: Pending) {
+    this.buffered -= f.bytes;
+    f.bytes = 0;
+    f.chunks.clear();
+  }
+
+  private withEvicted(p: FileProgress, evicted: number[]): FileProgress {
+    return evicted.length ? { ...p, evicted } : p;
   }
 
   private status(fileId: number, f: Pending): FileProgress {
@@ -264,7 +378,7 @@ export class FileAssembler {
     // Lengths were checked per chunk, so the total is exactly dataSize.
     const data = new Uint8Array(m.dataSize);
     for (let i = 0; i < m.chunkCount; i++) data.set(f.chunks.get(i)!, i * m.chunkSize);
-    this.pending.delete(fileId);
+    this.drop(fileId);
     if (crc32(data) !== m.crc) return { ...status, error: 'file checksum mismatch' };
 
     this.delivered.set(fileId, m);
@@ -313,5 +427,5 @@ export async function decompress(data: Uint8Array, expectedSize: number): Promis
 
 /** Chunk size giving roughly four-second frames on the given modem. */
 export function chunkSizeFor(modem: { rawBitRate: number; maxPayload: number }): number {
-  return Math.max(16, Math.min(modem.maxPayload - CHUNK_HEADER, Math.floor((modem.rawBitRate * 4 * 0.75) / 8)));
+  return Math.max(MIN_CHUNK_SIZE, Math.min(modem.maxPayload - CHUNK_HEADER, Math.floor((modem.rawBitRate * 4 * 0.75) / 8)));
 }

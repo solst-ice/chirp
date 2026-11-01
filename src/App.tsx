@@ -31,6 +31,10 @@ const MAX_LOG_LINES = 400;
 const UI_UPDATE_MS = 100;
 const MODE_KEY = 'chirp-mode';
 const PROGRESS_WIDTH = 16;
+// Longest name shown in the status bar; the log row carries the full name.
+const STATUS_NAME_CHARS = 28;
+// Phones and short windows start with the spectrum collapsed so the composer is on screen.
+const ROOMY_QUERY = '(min-width: 761px) and (min-height: 600px)';
 
 // Typing STARTDEMO on one device sets off a short exchange between two.
 const DEMO_REPLIES: Record<string, string> = {
@@ -96,6 +100,14 @@ const formatSeconds = (s: number) => {
   if (s < 60) return `${s.toFixed(1)}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60).toString().padStart(2, '0')}s`;
   return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60).toString().padStart(2, '0')}m`;
+};
+
+/** Shorten long names in the middle, keeping the extension visible. */
+const shorten = (s: string, max: number) => {
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  const tail = Math.floor((max - 1) / 3);
+  return `${chars.slice(0, max - 1 - tail).join('')}…${chars.slice(-tail).join('')}`;
 };
 
 const formatBand = ([lo, hi]: [number, number]) => `${(lo / 1000).toFixed(1)}–${(hi / 1000).toFixed(1)}k`;
@@ -222,6 +234,7 @@ function App() {
   const [lastFile, setLastFile] = useState<{ file: File; fileId: number; modemId: string } | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px)').matches);
+  const [spectrumOpen, setSpectrumOpen] = useState(() => window.matchMedia(ROOMY_QUERY).matches);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -251,9 +264,13 @@ function App() {
     setLog((prev) => {
       const next = [...prev, { ...line, id, time: timestamp() }];
       if (next.length <= MAX_LOG_LINES) return next;
+      const trimmed = new Set<number>();
       for (const old of next.splice(0, next.length - MAX_LOG_LINES)) {
+        trimmed.add(old.id);
         if (old.file && blobUrlsRef.current.delete(old.file.url)) URL.revokeObjectURL(old.file.url);
       }
+      // A transfer whose row scrolled out of the log starts a new row if it continues.
+      for (const [fileId, entry] of fileLinesRef.current) if (trimmed.has(entry.lineId)) fileLinesRef.current.delete(fileId);
       return next;
     });
     return id;
@@ -274,7 +291,7 @@ function App() {
   const ensureContext = () => {
     if (!audioContextRef.current) {
       const ctx = new AudioContextClass();
-      ctx.addEventListener('statechange', () => setAudioState(ctx.state));
+      ctx.addEventListener('statechange', () => audioStateChangeRef.current(ctx.state));
       audioContextRef.current = ctx;
       setSampleRate(ctx.sampleRate);
       setAudioState(ctx.state);
@@ -309,6 +326,7 @@ function App() {
   if (!transmitterRef.current) {
     transmitterRef.current = new Transmitter({
       sampleRate: () => audioContextRef.current?.sampleRate ?? 48000,
+      clock: () => audioContextRef.current?.currentTime ?? performance.now() / 1000,
       play: (samples) => play(audioContextRef.current!, samples),
       channelBusy: () => receptionsRef.current.size > 0,
       beforeAudio: (monitor) => {
@@ -328,7 +346,33 @@ function App() {
   }
   const transmitter = transmitterRef.current;
 
+  // The OS or browser can suspend audio at any time (calls, screen lock, tab
+  // switches on mobile). Whatever was in flight cannot resume mid-frame, so end
+  // it visibly and let the status bar offer START AUDIO.
+  const audioStateChangeRef = useRef<(state: AudioContextState) => void>(() => {});
+  audioStateChangeRef.current = (next: AudioContextState) => {
+    setAudioState(next);
+    if (next === 'running') return;
+    transmitter.cancel('interrupted');
+    if (receptionsRef.current.size > 0) announce('Audio paused; reception interrupted');
+    abortReceptions('interrupted · audio paused');
+    for (const d of demodsRef.current.values()) d.reset();
+  };
+
+  /** Close the log row of a transfer the assembler no longer holds. */
+  const dropFileLine = (fileId: number, reason: string) => {
+    const entry = fileLinesRef.current.get(fileId);
+    if (!entry) return;
+    fileLinesRef.current.delete(fileId);
+    updateLine(entry.lineId, {
+      tag: 'warn',
+      progress: undefined,
+      note: `incomplete · ${entry.received}/${entry.total ?? '?'} chunks · ${reason} · ask the sender to RESEND`,
+    });
+  };
+
   const handleFileProgress = async (p: FileProgress, mode: string) => {
+    for (const id of p.evicted ?? []) dropFileLine(id, 'dropped to make room');
     if (p.alreadyDelivered) return;
     const name = p.manifest?.name ?? `file #${p.fileId.toString(16)}`;
     let entry = fileLinesRef.current.get(p.fileId);
@@ -535,7 +579,7 @@ function App() {
         announce(`Sent: ${text}`);
         break;
       case 'cancelled':
-        updateLine(lineId, { tag: 'warn', progress: undefined, note: 'cancelled' });
+        updateLine(lineId, { tag: 'warn', progress: undefined, note: outcome.reason === 'interrupted' ? 'interrupted · audio paused · not sent' : 'cancelled' });
         restoreDraft();
         break;
       case 'failed':
@@ -618,7 +662,10 @@ function App() {
         announce(`Sent file ${file.name}`);
         break;
       case 'cancelled':
-        if (lineId !== undefined) updateLine(lineId, { tag: 'warn', progress: undefined, note: `${size} · cancelled · RESEND to finish` });
+        if (lineId !== undefined) {
+          const why = outcome.reason === 'interrupted' ? 'interrupted · audio paused' : 'cancelled';
+          updateLine(lineId, { tag: 'warn', progress: undefined, note: `${size} · ${why} · RESEND to finish` });
+        }
         break;
       case 'failed':
         if (lineId !== undefined) updateLine(lineId, { tag: 'err', progress: undefined, note: outcome.error.message });
@@ -661,7 +708,14 @@ function App() {
     selfTestRef.current = null;
 
     if (outcome.status !== 'sent') {
-      const note = outcome.status === 'failed' ? outcome.error.message : outcome.status === 'busy' ? 'already transmitting' : 'cancelled';
+      const note =
+        outcome.status === 'failed'
+          ? outcome.error.message
+          : outcome.status === 'busy'
+            ? 'already transmitting'
+            : outcome.reason === 'interrupted'
+              ? 'interrupted · audio paused'
+              : 'cancelled';
       updateLine(lineId, { tag: 'warn', progress: undefined, note });
     } else if (test.heard) {
       updateLine(lineId, { tag: 'rx', progress: undefined, note: `passed · this device hears its own ${m.label} signal · margin ${test.heard.marginDb.toFixed(1)} dB` });
@@ -725,32 +779,38 @@ function App() {
     startAudio();
     addLine({
       tag: 'sys',
-      text: 'open chirp on a second device and allow its microphone, then send',
-      note: 'every mode is received automatically · sending is one-way, delivery is not confirmed',
+      text: 'ready · every mode is received automatically',
+      note: 'sending is one-way, delivery is not confirmed',
     });
     void startListening();
+    // With a keyboard, start in the composer. Not on touch screens, where focus opens the keyboard.
+    if (window.matchMedia('(pointer: fine)').matches && !document.activeElement?.closest('input, textarea, select')) {
+      inputRef.current?.focus();
+    }
   });
   useEffect(() => {
     const t = setTimeout(() => startupRef.current(), 300);
     return () => clearTimeout(t);
   }, []);
 
-  // Mark files that stopped arriving as incomplete rather than leaving them "receiving".
+  // Mark files that stopped arriving as incomplete rather than leaving them
+  // "receiving", and close rows of transfers the assembler has given up on.
+  const fileTickRef = useRef<() => void>(() => {});
+  fileTickRef.current = () => {
+    const now = Date.now();
+    for (const id of assemblerRef.current.expire(now)) dropFileLine(id, 'expired');
+    for (const entry of fileLinesRef.current.values()) {
+      if (entry.stale || now - entry.lastSeen < FILE_STALE_MS) continue;
+      entry.stale = true;
+      updateLine(entry.lineId, {
+        tag: 'warn',
+        progress: undefined,
+        note: `incomplete · ${entry.received}/${entry.total ?? '?'} chunks · ask the sender to RESEND`,
+      });
+    }
+  };
   useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      for (const entry of fileLinesRef.current.values()) {
-        if (entry.stale || now - entry.lastSeen < FILE_STALE_MS) continue;
-        entry.stale = true;
-        setLog((prev) =>
-          prev.map((l) =>
-            l.id === entry.lineId
-              ? { ...l, tag: 'warn', progress: undefined, note: `incomplete · ${entry.received}/${entry.total ?? '?'} chunks · ask the sender to RESEND` }
-              : l,
-          ),
-        );
-      }
-    }, 2000);
+    const t = setInterval(() => fileTickRef.current(), 2000);
     return () => clearInterval(t);
   }, []);
 
@@ -791,25 +851,44 @@ function App() {
   const maxFrequency = Math.min(20000, sampleRate / 2);
   const audioRunning = audioState === 'running';
 
-  let state: { text: string; className: string; action?: { label: string; run: () => void } };
-  if (txState.kind === 'preparing') state = { text: `… PREPARING ${txState.label}`, className: 'warn' };
-  else if (txState.kind === 'waiting') state = { text: '◌ WAITING FOR CLEAR CHANNEL', className: 'warn' };
+  type Action = { label: React.ReactNode; run: () => void; primary?: boolean };
+  const cancelAction: Action = {
+    label: (
+      <>
+        <span className="key-hint">ESC </span>CANCEL
+      </>
+    ),
+    run: () => transmitter.cancel(),
+  };
+  const listenAction: Action = { label: 'STOP', run: stopListening };
+  let state: { text: string; className: string; actions: Action[] };
+  // Paused audio comes first: while it lasts nothing can be sent or heard,
+  // whatever was in progress.
+  if (audioState !== 'none' && !audioRunning)
+    state = {
+      text: '○ AUDIO PAUSED',
+      className: 'warn',
+      actions: [{ label: 'START AUDIO', run: startAudio, primary: true }, ...(txBusy ? [cancelAction] : [])],
+    };
+  else if (txState.kind === 'preparing')
+    state = { text: `… PREPARING ${shorten(txState.label, STATUS_NAME_CHARS)}`, className: 'warn', actions: [cancelAction] };
+  else if (txState.kind === 'waiting') state = { text: '◌ WAITING FOR CLEAR CHANNEL', className: 'warn', actions: [cancelAction] };
   else if (txState.kind === 'sending')
     state = {
       text: `▲ TRANSMITTING ${txState.modem} ${Math.round(txState.progress * 100)}% · ${formatSeconds(txState.remaining)} left`,
       className: 'tx',
+      actions: [cancelAction],
     };
-  else if (rxState) state = { text: `◆ RECEIVING ${rxState.mode} ${Math.round(rxState.progress * 100)}%`, className: 'rx' };
-  else if (audioState === 'none') state = { text: '… STARTING', className: 'dim' };
-  else if (!audioRunning) state = { text: '○ AUDIO PAUSED', className: 'warn', action: { label: 'START AUDIO', run: startAudio } };
-  else if (mic === 'requesting') state = { text: '… WAITING FOR MICROPHONE PERMISSION', className: 'warn' };
+  else if (rxState) state = { text: `◆ RECEIVING ${rxState.mode} ${Math.round(rxState.progress * 100)}%`, className: 'rx', actions: [listenAction] };
+  else if (audioState === 'none') state = { text: '… STARTING', className: 'dim', actions: [] };
+  else if (mic === 'requesting') state = { text: '… WAITING FOR MICROPHONE PERMISSION', className: 'warn', actions: [] };
   else if (mic === 'denied')
-    state = { text: '✕ NO MICROPHONE · SEND ONLY', className: 'err', action: { label: 'RETRY MIC', run: () => void startListening() } };
+    state = { text: '✕ NO MICROPHONE · SEND ONLY', className: 'err', actions: [{ label: 'RETRY MIC', run: () => void startListening() }] };
   else if (mic === 'ended')
-    state = { text: '✕ MICROPHONE DISCONNECTED', className: 'err', action: { label: 'RETRY MIC', run: () => void startListening() } };
-  else if (mic === 'off') state = { text: '○ NOT LISTENING', className: 'warn', action: { label: 'LISTEN', run: () => void startListening() } };
-  else state = { text: '● LISTENING', className: 'ok', action: { label: 'STOP', run: stopListening } };
-  if (txBusy) state.action = { label: 'ESC CANCEL', run: () => transmitter.cancel() };
+    state = { text: '✕ MICROPHONE DISCONNECTED', className: 'err', actions: [{ label: 'RETRY MIC', run: () => void startListening() }] };
+  else if (mic === 'off') state = { text: '○ NOT LISTENING', className: 'warn', actions: [{ label: 'LISTEN', run: () => void startListening() }] };
+  else state = { text: '● LISTENING', className: 'ok', actions: [listenAction] };
+  const firstUse = !log.some((l) => l.tag === 'rx' || l.tag === 'tx');
 
   return (
     <div className="app" onClick={handleUserInteraction}>
@@ -818,17 +897,18 @@ function App() {
         <span className="dim topbar-sub">acoustic modem</span>
         <span className="spacer" />
         <span className={`state ${state.className}`}>{state.text}</span>
-        {state.action && (
+        {state.actions.map((action, i) => (
           <button
-            className={`btn${state.action.label === 'START AUDIO' ? ' btn-primary' : ''}`}
+            key={i}
+            className={`btn${action.primary ? ' btn-primary' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
-              state.action!.run();
+              action.run();
             }}
           >
-            [ {state.action.label} ]
+            [ {action.label} ]
           </button>
-        )}
+        ))}
         <span className="dim topbar-sub">
           {(sampleRate / 1000).toFixed(1)}kHz · {captureMethod}
         </span>
@@ -838,191 +918,207 @@ function App() {
       </div>
 
       <main className="screen">
-        <Panel title="SPECTRUM" right={`mic input · 0–${maxFrequency / 1000}kHz`} className="p-spectrum">
-          <Spectrum
-            analyser={analyser}
-            sampleRate={sampleRate}
-            maxFrequency={maxFrequency}
-            band={modem.band}
-            bandLabel={`TX:${modem.label}`}
-            transmitting={txState.kind === 'sending'}
-          />
-        </Panel>
+        <div className="col col-main">
+          <Panel title="SPECTRUM" right={`mic input · 0–${maxFrequency / 1000}kHz`} className="p-spectrum">
+            <details open={spectrumOpen} onToggle={(e) => setSpectrumOpen(e.currentTarget.open)}>
+              <summary className="dim">spectrum &amp; waterfall</summary>
+              {/* Unmounted while collapsed, which also stops its animation loop. */}
+              {spectrumOpen && (
+                <Spectrum
+                  analyser={analyser}
+                  sampleRate={sampleRate}
+                  maxFrequency={maxFrequency}
+                  band={modem.band}
+                  bandLabel={`TX:${modem.label}`}
+                  transmitting={txState.kind === 'sending'}
+                />
+              )}
+            </details>
+          </Panel>
 
-        <Panel title="LOG" right={`${log.length} lines`} className="p-log">
-          <div
-            className="log"
-            ref={logRef}
-            tabIndex={0}
-            aria-label="Transfer log"
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-            }}
-          >
-            {log.map((line) => (
-              <LogRow key={line.id} line={line} />
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
-          <fieldset className="modes" disabled={txBusy}>
-            <legend className="field-label">MODE</legend>
-            {MODEMS.map((m, i) => {
-              const supported = m.supports(sampleRate);
-              const active = m.id === modeId;
-              return (
-                <label
-                  key={m.id}
-                  className={`mode-row${active ? ' active' : ''}${supported ? '' : ' disabled'}`}
-                  title={supported ? m.description : `needs a higher sample rate than ${sampleRate} Hz`}
-                >
-                  <input
-                    type="radio"
-                    name="mode"
-                    value={m.id}
-                    checked={active}
-                    disabled={!supported}
-                    onChange={() => selectMode(m.id)}
-                  />
-                  <span className="mode-radio" aria-hidden="true">
-                    {active ? '(•)' : '( )'}
-                  </span>
-                  <span className="mode-name">{m.label}</span>
-                  <span className="mode-band">{formatBand(m.band)}</span>
-                  <span className="mode-rate">~{goodput(m.id)} b/s</span>
-                  <span className="mode-key" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                </label>
-              );
-            })}
-          </fieldset>
-          <div className="mode-hint">{modem.description}</div>
-
-          <label className="field-label" htmlFor="composer">
-            MESSAGE
-          </label>
-          <div className="prompt">
-            <span className="prompt-sign" aria-hidden="true">
-              &gt;
-            </span>
-            <textarea
-              id="composer"
-              ref={inputRef}
-              value={inputText}
-              rows={3}
-              spellCheck={false}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => {
-                // Enter that confirms an IME composition must not send.
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  if (inputText.trim() && !overLimit) void sendText(inputText, true);
-                } else if (e.key === 'Escape' && !transmitter.busy) {
-                  e.currentTarget.blur();
-                }
+          <Panel title="LOG" right={`${log.length} lines`} className="p-log">
+            <div
+              className="log"
+              ref={logRef}
+              tabIndex={0}
+              aria-label="Transfer log"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
               }}
-              placeholder="type a message…"
-            />
-          </div>
-          <div className={`tx-meta${overLimit ? ' err' : ''}`}>
-            {payloadBytes}/{modem.maxPayload} B
-            {payloadBytes > 0 && ` · ~${formatSeconds(modem.airtime(payloadBytes))} airtime`}
-          </div>
-
-          <div className="actions">
-            {txBusy ? (
-              <button className="btn btn-primary" onClick={() => transmitter.cancel()}>
-                [ ESC CANCEL ]
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit}>
-                [ ⏎ SEND ]
-              </button>
-            )}
-            <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy}>
-              [ <span className="key">F</span>ILE ]
-            </button>
-            {lastFile && (
-              <button className="btn" onClick={resendLastFile} disabled={txBusy} title={`Resend ${lastFile.file.name}`}>
-                [ <span className="key">R</span>ESEND {lastFile.file.name} ]
-              </button>
-            )}
-            <button
-              className="btn"
-              onClick={() => void runSelfTest()}
-              disabled={txBusy || mic !== 'live'}
-              title="Play a test frame and check that this device can hear it"
             >
-              [ <span className="key">T</span>EST ]
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              hidden
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) void sendFile(file);
-              }}
-            />
-          </div>
-        </Panel>
-
-        <Panel title="LINK" className="p-link">
-          <details open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
-            <summary className="dim">diagnostics</summary>
-            <div className="kv">
-              <span className="dim">audio</span>
-              <span>
-                {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
-              </span>
-              <span className="dim">last tx</span>
-              <span>
-                {lastTx
-                  ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
-                      (lastTx.bytes * 8) / lastTx.duration,
-                    )} b/s`
-                  : '—'}
-              </span>
-              <span className="dim">last rx</span>
-              <span>
-                {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
-              </span>
+              {log.map((line) => (
+                <LogRow key={line.id} line={line} />
+              ))}
             </div>
-            <table className="stats">
-              <caption className="sr-only">Frames received per mode</caption>
-              <thead>
-                <tr>
-                  <th scope="col">MODE</th>
-                  <th scope="col">SYNC</th>
-                  <th scope="col">OK</th>
-                  <th scope="col">ERR</th>
-                  <th scope="col" className="col-fixed">
-                    FIXED
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {MODEMS.map((m) => {
-                  const s = stats[m.id];
-                  return (
-                    <tr key={m.id}>
-                      <th scope="row">{m.label}</th>
-                      <td>{s?.syncs ?? 0}</td>
-                      <td className="ok">{s?.frames ?? 0}</td>
-                      <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
-                      <td className="col-fixed">{s?.corrected ?? 0}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </details>
-        </Panel>
+          </Panel>
+        </div>
+
+        <div className="col col-side">
+          <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
+            <fieldset className="modes" disabled={txBusy}>
+              <legend className="field-label">MODE</legend>
+              {MODEMS.map((m, i) => {
+                const supported = m.supports(sampleRate);
+                const active = m.id === modeId;
+                return (
+                  <label
+                    key={m.id}
+                    className={`mode-row${active ? ' active' : ''}${supported ? '' : ' disabled'}`}
+                    title={supported ? m.description : `needs a higher sample rate than ${sampleRate} Hz`}
+                  >
+                    <input
+                      type="radio"
+                      name="mode"
+                      value={m.id}
+                      checked={active}
+                      disabled={!supported}
+                      onChange={() => selectMode(m.id)}
+                    />
+                    <span className="mode-radio" aria-hidden="true">
+                      {active ? '(•)' : '( )'}
+                    </span>
+                    <span className="mode-name">{m.label}</span>
+                    <span className="mode-band">{formatBand(m.band)}</span>
+                    <span className="mode-rate">~{goodput(m.id)} b/s</span>
+                    <span className="mode-key" aria-hidden="true">
+                      {i + 1}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+            <div className="mode-hint">
+              <span className="mode-hint-rate">~{goodput(modem.id)} b/s · </span>
+              {modem.description}
+            </div>
+
+            <label className="field-label" htmlFor="composer">
+              MESSAGE
+            </label>
+            <div className="prompt">
+              <span className="prompt-sign" aria-hidden="true">
+                &gt;
+              </span>
+              <textarea
+                id="composer"
+                ref={inputRef}
+                value={inputText}
+                rows={3}
+                spellCheck={false}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter that confirms an IME composition must not send.
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (inputText.trim() && !overLimit) void sendText(inputText, true);
+                  } else if (e.key === 'Escape' && !transmitter.busy) {
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="type a message…"
+              />
+            </div>
+            {firstUse && (
+              <div className="tx-hint">open chirp on a second device and allow its microphone, then send</div>
+            )}
+            <div className={`tx-meta${overLimit ? ' err' : ''}`}>
+              {payloadBytes}/{modem.maxPayload} B
+              {payloadBytes > 0 && ` · ~${formatSeconds(modem.airtime(payloadBytes))} airtime`}
+            </div>
+
+            <div className="actions">
+              {txBusy ? (
+                <button className="btn btn-primary" onClick={() => transmitter.cancel()}>
+                  [ <span className="key-hint">ESC </span>CANCEL ]
+                </button>
+              ) : (
+                <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit}>
+                  [ ⏎ SEND ]
+                </button>
+              )}
+              <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy}>
+                [ <span className="key">F</span>ILE ]
+              </button>
+              {lastFile && (
+                <button className="btn" onClick={resendLastFile} disabled={txBusy} title={`Resend ${lastFile.file.name}`}>
+                  [ <span className="key">R</span>ESEND {lastFile.file.name} ]
+                </button>
+              )}
+              <button
+                className="btn"
+                onClick={() => void runSelfTest()}
+                disabled={txBusy || mic !== 'live'}
+                title="Play a test frame and check that this device can hear it"
+              >
+                [ <span className="key">T</span>EST ]
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void sendFile(file);
+                }}
+              />
+            </div>
+          </Panel>
+
+          <Panel title="LINK" className="p-link">
+            <details open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
+              <summary className="dim">diagnostics</summary>
+              <div className="kv">
+                <span className="dim">audio</span>
+                <span>
+                  {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
+                </span>
+                <span className="dim">last tx</span>
+                <span>
+                  {lastTx
+                    ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
+                        (lastTx.bytes * 8) / lastTx.duration,
+                      )} b/s`
+                    : '—'}
+                </span>
+                <span className="dim">last rx</span>
+                <span>
+                  {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
+                </span>
+              </div>
+              <table className="stats">
+                <caption className="sr-only">Frames received per mode</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">MODE</th>
+                    <th scope="col">SYNC</th>
+                    <th scope="col">OK</th>
+                    <th scope="col">ERR</th>
+                    <th scope="col" className="col-fixed">
+                      FIXED
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MODEMS.map((m) => {
+                    const s = stats[m.id];
+                    return (
+                      <tr key={m.id}>
+                        <th scope="row">{m.label}</th>
+                        <td>{s?.syncs ?? 0}</td>
+                        <td className="ok">{s?.frames ?? 0}</td>
+                        <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
+                        <td className="col-fixed">{s?.corrected ?? 0}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </details>
+          </Panel>
+        </div>
       </main>
 
       <footer className="keybar">
