@@ -204,6 +204,16 @@ describe('file transfer', () => {
     assert.equal(a.bufferedBytes, 3500);
   });
 
+  test('smaller configured limits hold for a single transfer and its first chunk', () => {
+    const shared = new FileAssembler({ maxBuffered: 1000 });
+    shared.accept(orphan(5, 0, 800));
+    shared.accept(orphan(5, 1, 800));
+    assert.equal(shared.bufferedBytes, 800);
+    const perFile = new FileAssembler({ maxBytes: 16 });
+    assert.equal(perFile.accept(orphan(6, 0, 1000)), null);
+    assert.equal(perFile.bufferedBytes, 0);
+  });
+
   test('expires transfers that stop arriving and reclaims their budget', () => {
     const a = new FileAssembler();
     const { frames } = buildFileFrames(options(bytes(500, 12)));

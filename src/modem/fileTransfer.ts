@@ -287,14 +287,17 @@ export class FileAssembler {
       known.lastSeen = now;
       return this.status(fileId, known); // Does not fit the announced file; ignore it.
     }
-    if (known && !known.manifest) {
+    // Checked before anything is evicted or stored, including for a transfer's first chunk.
+    const held = known?.bytes ?? 0;
+    const after = held - (known?.chunks.get(index)?.length ?? 0) + length;
+    const refuse = () => (known ? this.status(fileId, known) : null);
+    if (!known?.manifest) {
       // No manifest yet: hold no more than the largest valid file would need.
-      const replaced = known.chunks.get(index)?.length ?? 0;
-      const fresh = !known.chunks.has(index);
-      if (known.bytes - replaced + length > this.limits.maxBytes || (fresh && known.chunks.size >= this.maxChunks)) {
-        return this.status(fileId, known); // More than any valid file: ignore it.
-      }
+      const fresh = !known?.chunks.has(index);
+      if (after > this.limits.maxBytes || (fresh && (known?.chunks.size ?? 0) >= this.maxChunks)) return refuse();
     }
+    // Even with every other transfer evicted, the shared budget must have room.
+    if (after > this.limits.maxBuffered) return refuse();
     const evicted: number[] = [];
     const f = this.entry(fileId, now, evicted);
     this.removeChunk(f, index);

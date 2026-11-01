@@ -1,17 +1,36 @@
-// The explainer's figures. Each one computes what it shows from the real code
-// (version 1's character map, the FFT, today's modem) rather than a mock-up.
+// The explainer's figures. Most compute what they show from the real code:
+// version 1's character map and timing, a real FFT, and today's frame encoder.
+// The sync and error-correction figures are simplified illustrations of the
+// idea, and say so in their captions.
 
 import { useMemo, useRef, useState } from 'react';
-import { frameBytes, frameTones } from '../modem/mfsk';
+import { CRC_BYTES, HEADER_BYTES, PREAMBLE, frameBytes, frameTones } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import { FrameType } from '../modem/types';
 import Canvas, { type Draw } from './Canvas';
 import { SAMPLE_RATE, V1, V1_FREQUENCIES, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
 import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
-import { playTone, playV1 } from './sound';
+import { playTone, playV1, stopSound, usePlaying } from './sound';
 
 const CELL = 8;
 const enc = new TextEncoder();
+
+/** A play button; while its sound plays it becomes STOP, and other demos wait their turn. */
+export function DemoButton({ id, label, busy, play }: { id: string; label: string; busy: boolean; play: (id: string) => Promise<void> }) {
+  const playing = usePlaying();
+  if (playing === id) {
+    return (
+      <button className="btn" onClick={stopSound}>
+        [ ■ STOP ]
+      </button>
+    );
+  }
+  return (
+    <button className="btn" disabled={busy || playing !== null} onClick={() => void play(id)}>
+      [ ▶ {label} ]
+    </button>
+  );
+}
 const hex = (b: number) => b.toString(16).padStart(2, '0');
 
 const text = (ctx: CanvasRenderingContext2D, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') => {
@@ -66,9 +85,7 @@ export function ToneFigure({ busy }: { busy: boolean }) {
           <input type="range" min={0} max={1} step={0.001} value={position} onChange={(e) => setPosition(Number(e.target.value))} />
         </label>
         <span className="ex-readout">{hz.toLocaleString()} Hz</span>
-        <button className="btn" disabled={busy} onClick={() => void playTone(hz)}>
-          [ ▶ HEAR IT ]
-        </button>
+        <DemoButton id="tone" label="HEAR IT" busy={busy} play={(id) => playTone(id, hz)} />
       </div>
       <figcaption>
         Each dot is one sample: the microphone measures the air pressure 48,000 times a second. Slide up and the wave squeezes
@@ -184,9 +201,7 @@ export function V1Figure({ busy }: { busy: boolean }) {
       <Canvas height={56} label="Version 1 character map: every character at its own pitch, 100 Hz apart" draw={drawMap} />
       <Canvas height={150} label="HELLO in version 1: a start tone, one tone per letter, an end tone" draw={drawTimeline} animate />
       <div className="ex-controls">
-        <button className="btn" disabled={busy} onClick={() => void playV1(DEMO)}>
-          [ ▶ HEAR HELLO, VERSION 1 ]
-        </button>
+        <DemoButton id="v1-map" label="HEAR HELLO, VERSION 1" busy={busy} play={(id) => playV1(id, DEMO)} />
       </div>
       <figcaption>
         Each letter is 70 ms of one pitch, then 30 ms of quiet; slowed down 3× here. The receiver ignores a letter it heard less
@@ -327,8 +342,7 @@ const quoted = (bytes: number[]) => {
 };
 
 const FAST = PROFILES[0];
-const PREAMBLE_SLOTS = 8;
-const HEADER_BYTES = 10;
+const PREAMBLE_SLOTS = PREAMBLE.length;
 type Role = 'sync' | 'header' | 'message' | 'check' | 'repair' | 'pad';
 
 export function FrameFigure({ value }: { value: string }) {
@@ -343,7 +357,7 @@ export function FrameFigure({ value }: { value: string }) {
     const tones = frameTones(FAST, frame);
     const bytes = frameBytes(FAST, frame);
     const role = (byte: number): Role =>
-      byte < HEADER_BYTES ? 'header' : byte < HEADER_BYTES + payload.length ? 'message' : byte < HEADER_BYTES + payload.length + 4 ? 'check' : byte < bytes.length ? 'repair' : 'pad';
+      byte < HEADER_BYTES ? 'header' : byte < HEADER_BYTES + payload.length ? 'message' : byte < HEADER_BYTES + payload.length + CRC_BYTES ? 'check' : byte < bytes.length ? 'repair' : 'pad';
     const roles = tones.map((_, s): Role => (s < PREAMBLE_SLOTS ? 'sync' : role((s - PREAMBLE_SLOTS) * 2)));
     return { tones, bytes, roles, payload };
   }, [value]);
@@ -467,7 +481,7 @@ export function EchoFigure() {
       </div>
       <p className={`ex-verdict ${alternate ? 'ok' : 'err'}`}>
         {alternate
-          ? 'The echo rings on A1, a row slot 2 never reads: it cannot be mistaken for data.'
+          ? 'The echo rings on A1, a row slot 2 does not read, so here it does not compete with the real tone.'
           : 'The echo on A1 competes with the real tone on A2: slot 2 might be read as 1 instead of 2.'}
       </p>
     </figure>
@@ -476,7 +490,8 @@ export function EchoFigure() {
 
 /* ── 5d · finding the start ──────────────────────────── */
 
-const SYNC_PATTERN = [0, 11, 3, 14, 6, 9, 1, 12];
+// The real start pattern (one group's worth of it).
+const SYNC_PATTERN = PREAMBLE;
 const STREAM_LENGTH = 40;
 const SYNC_AT = 19;
 
@@ -534,8 +549,9 @@ export function SyncFigure() {
     <figure className="ex-figure">
       <Canvas height={170} label="The receiver slides the known start pattern along what it hears until all eight slots match" draw={draw} animate />
       <figcaption>
-        Top: one tone per slot as heard (pink boxes are the pattern being tried). Bottom: how many of the 8 slots match at each
-        position.
+        Simplified: one tone per slot, and a match means the exact tone. The real receiver compares how much of the sound
+        falls on each expected tone, so it still locks on when some slots are noisy. Top: tones as heard (pink boxes are the
+        pattern being tried). Bottom: how many of the 8 slots match at each position.
       </figcaption>
     </figure>
   );
@@ -561,13 +577,14 @@ export function FecFigure() {
   const ref = useRef<HTMLElement>(null);
   const visible = useVisible(ref);
   const reduced = useReducedMotion();
-  const [manual, setManual] = useState(0);
-  const tick = useTicker(1800, visible && !reduced);
-  const step = (tick + manual) % FEC_STEPS.length;
+  // Steps on its own until the reader clicks; from then on the reader is in control.
+  const [manual, setManual] = useState<number | null>(null);
+  const tick = useTicker(1800, visible && !reduced && manual === null);
+  const step = manual ?? tick % FEC_STEPS.length;
   const inLine = step === 1 || step === 2;
   return (
     <figure className="ex-figure" ref={ref}>
-      <button className="ex-fec" onClick={() => setManual((m) => m + 1)} aria-label="Next step">
+      <button className="ex-fec" onClick={() => setManual((step + 1) % FEC_STEPS.length)} aria-label="Next step">
         {Array.from({ length: FEC_TOTAL }, (_, i) => {
           const b = i % FEC_BLOCKS;
           const j = Math.floor(i / FEC_BLOCKS);
@@ -585,12 +602,12 @@ export function FecFigure() {
           );
         })}
       </button>
-      <p className="ex-verdict" aria-live="polite">
+      <p className="ex-verdict" aria-live={manual === null ? 'off' : 'polite'}>
         {step + 1}/{FEC_STEPS.length} · {FEC_STEPS[step]}
       </p>
       <figcaption>
-        Without interleaving the burst would land in one block: {BURST.size} bad bytes, more than its repair bytes can fix. Click
-        to step.
+        Simplified, with tiny blocks so it fits. Without interleaving the burst would land in one block: {BURST.size} bad
+        bytes, more than its repair bytes can fix. Click to step through at your own pace.
       </figcaption>
     </figure>
   );
@@ -622,7 +639,10 @@ export function FilesFigure() {
         <span className="dim">result</span>
         <span className="ok">✓ photo.jpg · every chunk present, checksum ok</span>
       </div>
-      <figcaption>M is the manifest (name, size, checksum); 0–3 are numbered chunks. A resend only has to fill the gap.</figcaption>
+      <figcaption>
+        M is the manifest (name, size, checksum); 0–3 are numbered chunks. A resend plays the whole file again; the receiver
+        keeps the chunks it already has and only needs the one it missed.
+      </figcaption>
     </figure>
   );
 }

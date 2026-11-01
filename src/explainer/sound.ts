@@ -1,12 +1,33 @@
 // Playback for the explainer's "hear it" buttons, on its own AudioContext so it
-// never touches the app's transmit path.
+// never touches the app's transmit path. The speaker is still shared, so the
+// app calls `stopSound()` before every transmission and the page disables
+// demos while one is running.
 
+import { useSyncExternalStore } from 'react';
 import { getModem } from '../modem/profiles';
 import { FrameType } from '../modem/types';
 import { V1, V1_FREQUENCIES } from './dsp';
 
 let ctx: AudioContext | null = null;
 let current: AudioBufferSourceNode | null = null;
+let playingId: string | null = null;
+const listeners = new Set<() => void>();
+
+function setPlaying(id: string | null) {
+  playingId = id;
+  listeners.forEach((l) => l());
+}
+
+/** Which demo is playing, if any. */
+export function usePlaying(): string | null {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => playingId,
+  );
+}
 
 function context(): AudioContext {
   ctx ??= new (window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
@@ -14,7 +35,7 @@ function context(): AudioContext {
   return ctx;
 }
 
-function playSamples(samples: Float32Array, rate: number): Promise<void> {
+function playSamples(id: string, samples: Float32Array, rate: number): Promise<void> {
   const c = context();
   current?.stop();
   const buffer = c.createBuffer(1, samples.length, rate);
@@ -23,10 +44,14 @@ function playSamples(samples: Float32Array, rate: number): Promise<void> {
   node.buffer = buffer;
   node.connect(c.destination);
   current = node;
+  setPlaying(id);
   return new Promise((resolve) => {
     node.onended = () => {
       node.disconnect();
-      if (current === node) current = null;
+      if (current === node) {
+        current = null;
+        setPlaying(null);
+      }
       resolve();
     };
     node.start();
@@ -50,13 +75,13 @@ function render(segments: { hz: number; seconds: number }[], rate: number): Floa
   return out;
 }
 
-export function playTone(hz: number, seconds = 0.6) {
+export function playTone(id: string, hz: number, seconds = 0.6) {
   const rate = context().sampleRate;
-  return playSamples(render([{ hz, seconds }], rate), rate);
+  return playSamples(id, render([{ hz, seconds }], rate), rate);
 }
 
 /** Version 1: start marker, one pitch per character, end marker. */
-export function playV1(text: string) {
+export function playV1(id: string, text: string) {
   const rate = context().sampleRate;
   const segments = [{ hz: V1.start, seconds: V1.markerSeconds }, { hz: 0, seconds: V1.gapSeconds }];
   for (const c of text.toUpperCase()) {
@@ -64,15 +89,15 @@ export function playV1(text: string) {
     if (hz) segments.push({ hz, seconds: V1.toneSeconds }, { hz: 0, seconds: V1.gapSeconds });
   }
   segments.push({ hz: V1.end, seconds: V1.markerSeconds });
-  return playSamples(render(segments, rate), rate);
+  return playSamples(id, render(segments, rate), rate);
 }
 
 /** Today's FAST mode, rendered by the real modem. */
-export function playV2(text: string) {
+export function playV2(id: string, text: string) {
   const rate = context().sampleRate;
   const modem = getModem('fast');
   const frame = { type: FrameType.Text, payload: new TextEncoder().encode(text) };
-  return playSamples(modem.modulate(frame, rate), rate);
+  return playSamples(id, modem.modulate(frame, rate), rate);
 }
 
 export function stopSound() {

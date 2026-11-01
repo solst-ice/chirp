@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getModem } from '../modem/profiles';
 import { V1 } from './dsp';
-import { EchoFigure, FecFigure, FftFigure, FilesFigure, FrameFigure, ModesFigure, NibbleFigure, SyncFigure, ToneFigure, V1Figure } from './figures';
+import { DemoButton, EchoFigure, FecFigure, FftFigure, FilesFigure, FrameFigure, ModesFigure, NibbleFigure, SyncFigure, ToneFigure, V1Figure } from './figures';
 import { playV1, playV2, stopSound } from './sound';
 import './Explainer.css';
 
@@ -26,7 +26,8 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
   const ref = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    ref.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
     ref.current?.focus({ preventScroll: true });
     return () => stopSound();
   }, []);
@@ -104,10 +105,12 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
 
         <Fix title="Fixed time slots, four tones at once">
           <p>
-            Sound is cut into 30 ms slots: 20 ms of tone, then 10 ms to let the room settle. Two equal values are simply two
-            slots, so doubles survive. Each slot sounds four tones at once, one from each of four sets of 16, so it carries four
-            nibbles, two bytes. Tones sit exactly 50 Hz apart (1 ÷ 20 ms), which keeps them from bleeding into each other. That
-            lets the receiver measure exactly those frequencies at exactly those moments, instead of scanning the whole spectrum.
+            Sound is cut into fixed slots: 30 ms each in FAST. Each slot holds its tones steady for 20 ms, the stretch the
+            receiver measures, with 5 ms fades at either end so one slot blends into the next without clicks. Two equal values
+            are simply two slots, so doubles survive. Each slot sounds four tones at once, one from each of four sets of 16, so
+            it carries four nibbles, two bytes. Tones sit exactly 50 Hz apart (1 ÷ 20 ms), which keeps them from bleeding into
+            each other over that 20 ms. That lets the receiver measure exactly those frequencies at exactly those moments,
+            instead of scanning the whole spectrum.
           </p>
           <FrameFigure value={demo} />
         </Fix>
@@ -131,18 +134,21 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
 
         <Fix title="Fixing mistakes">
           <p>
-            Some tones will still be misheard. <em>Reed–Solomon</em> error correction adds repair bytes (16 per 96 bytes in
-            FAST) that let the receiver rebuild the bytes it got wrong. The bytes of different blocks are interleaved, so a burst
-            of noise like a cough or a door hurts each block only a little. A final <em>CRC-32</em> checksum confirms the result;
-            a message that fails it is marked corrupted instead of passed off as correct.
+            Some tones will still be misheard. <em>Reed–Solomon</em> error correction adds repair bytes: in FAST, each block of
+            up to 96 data bytes gets 16, enough to rebuild any 8 wrong bytes in it (more when the receiver can tell which
+            readings were doubtful). A short message is a single, smaller block, so its repair bytes are a larger share. Longer
+            messages are split into blocks whose bytes are interleaved, so a burst of noise like a cough or a door hurts each
+            block only a little. A final <em>CRC-32</em> checksum confirms the result; a message that fails it is marked
+            corrupted instead of passed off as correct.
           </p>
           <FecFigure />
         </Fix>
 
         <Fix title="Files">
           <p>
-            A file is compressed, cut into numbered chunks, and announced by a manifest sent both first and last. Chunks can
-            arrive in any order, and pressing RESEND lets the receiver fill in whatever it missed.
+            A file is compressed when that makes it smaller, cut into numbered chunks, and announced by a manifest sent both
+            first and last. Chunks can arrive in any order. RESEND plays the whole file again, and the receiver keeps what it
+            already has and fills in what it missed.
           </p>
           <FilesFigure />
         </Fix>
@@ -179,7 +185,7 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
               <td>{v2Seconds(5).toFixed(2)} s, including repair bytes</td>
             </tr>
             <tr>
-              <th scope="row">100 characters</th>
+              <th scope="row">100 ASCII characters</th>
               <td>{v1Seconds(100).toFixed(1)} s</td>
               <td>{v2Seconds(100).toFixed(1)} s</td>
             </tr>
@@ -191,15 +197,12 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
           </tbody>
         </table>
         <div className="ex-controls">
-          <button className="btn" disabled={busy} onClick={() => void playV1('HELLO')}>
-            [ ▶ HELLO, VERSION 1 ]
-          </button>
-          <button className="btn" disabled={busy} onClick={() => void playV2('HELLO')}>
-            [ ▶ HELLO, VERSION 2 ]
-          </button>
+          <DemoButton id="v1" label="HELLO, VERSION 1" busy={busy} play={(id) => playV1(id, 'HELLO')} />
+          <DemoButton id="v2" label="HELLO, VERSION 2" busy={busy} play={(id) => playV2(id, 'HELLO')} />
         </div>
         <p className="dim">
-          Version 2's HELLO is a real transmission: if this device is listening, its own log will show it arriving.
+          Version 2's HELLO is a real transmission: if this device is listening and its microphone picks it up, its own log
+          may show it arriving.
         </p>
       </section>
     </article>

@@ -49,13 +49,13 @@ export interface MfskProfile {
 }
 
 const TONES = 16;
-const PREAMBLE = [0, 11, 3, 14, 6, 9, 1, 12];
+export const PREAMBLE = [0, 11, 3, 14, 6, 9, 1, 12];
 const VERSION = 1;
 const HEADER_DATA = 4;
 const HEADER_PARITY = 6;
-const HEADER_BYTES = HEADER_DATA + HEADER_PARITY;
+export const HEADER_BYTES = HEADER_DATA + HEADER_PARITY;
 const HEADER_NIBBLES = HEADER_BYTES * 2;
-const CRC_BYTES = 4;
+export const CRC_BYTES = 4;
 const LEAD_IN_SECONDS = 0.02;
 const TAIL_SECONDS = 0.02;
 

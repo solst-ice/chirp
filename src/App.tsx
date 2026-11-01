@@ -14,6 +14,7 @@ import {
 import { MODEMS, getModem } from './modem/profiles';
 import { FrameType, type DemodEvent, type Demodulator, type Modem } from './modem/types';
 import { Transmitter, airtimeOf, type SendingState, type TxState } from './transfer/transmitter';
+import { stopSound } from './explainer/sound';
 
 // Loaded on demand: most visits never open it.
 const Explainer = lazy(() => import('./explainer/Explainer'));
@@ -257,6 +258,7 @@ function App() {
   const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const explainToggleRef = useRef<HTMLButtonElement>(null);
 
   modeRef.current = modeId;
   micRef.current = mic;
@@ -334,6 +336,7 @@ function App() {
       play: (samples) => play(audioContextRef.current!, samples),
       channelBusy: () => receptionsRef.current.size > 0,
       beforeAudio: (monitor) => {
+        stopSound(); // An explainer demo must not play over a transmission.
         mutedRef.current = !monitor;
         if (!monitor) abortReceptions('interrupted by our transmission');
       },
@@ -765,7 +768,7 @@ function App() {
         e.preventDefault();
         void runSelfTest();
       }
-    } else if (e.key === '/' && !(document.activeElement instanceof HTMLTextAreaElement)) {
+    } else if (e.key === '/' && !e.isComposing && !(e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable]')) {
       e.preventDefault();
       inputRef.current?.focus();
     }
@@ -1127,7 +1130,13 @@ function App() {
 
       {explainOpen && (
         <Suspense fallback={<p className="dim">loading explanation…</p>}>
-          <Explainer busy={txBusy} onClose={() => setExplainOpen(false)} />
+          <Explainer
+            busy={txBusy}
+            onClose={() => {
+              setExplainOpen(false);
+              explainToggleRef.current?.focus();
+            }}
+          />
         </Suspense>
       )}
 
@@ -1138,7 +1147,7 @@ function App() {
           <span className="key">alt+r</span> resend <span className="key">alt+t</span> test
         </span>
         <span className="spacer" />
-        <button className="btn explain-toggle" onClick={() => setExplainOpen((open) => !open)} aria-expanded={explainOpen}>
+        <button ref={explainToggleRef} className="btn explain-toggle" onClick={() => setExplainOpen((open) => !open)} aria-expanded={explainOpen}>
           [ ? {explainOpen ? 'HIDE EXPLANATION' : 'EXPLAIN THIS'} ]
         </button>
         <span className="credits">
