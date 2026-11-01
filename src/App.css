@@ -1,283 +1,35 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: inherit;
-  background-color: #000000;
-  min-height: 100%;
-}
+/* ── screen ─────────────────────────────────────────── */
 
-.logo {
-  display: none;
-}
-
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
-}
-
-/* Cyberpunk Retro Theme */
-:root {
-  --bg-color: #000000;
-  --text-color: #e6e6fa;
-  --accent-color: #ff2b6d; /* Base pink color */
-  --secondary-accent: #00f0ff;
-  --dark-accent: #0c0c14;
-  --terminal-green: #00ff41;
-  --terminal-red: #ff003c;
-  --border-color: #1f1f3a;
-  --panel-bg: #0c0c14;
-  --mono-font: "Courier New", monospace;
-}
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  background-color: #000000 !important;
-  color: var(--text-color);
-  font-family: var(--mono-font);
-  line-height: 1.6;
-  padding: 0;
-  margin: 0;
-  min-height: 100%;
-  height: 100%;
-  overflow-x: hidden;
-  position: relative;
-}
-
-.app-container {
-  max-width: 100%;
-  margin: 0;
-  padding: 20px;
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cell);
   min-height: 100vh;
-  background-color: #000000;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  z-index: 1;
+  padding: var(--cell) 2ch 8px;
 }
 
-h1, h2, h3 {
-  color: var(--accent-color);
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  margin-bottom: 15px;
-  border-bottom: 2px solid var(--accent-color);
-  padding-bottom: 5px;
-  font-family: var(--mono-font);
+.dim {
+  color: var(--dim);
+}
+.ok {
+  color: var(--tx);
+}
+.rx {
+  color: var(--rx);
+}
+.tx {
+  color: var(--tx);
+}
+.warn {
+  color: var(--warn);
+}
+.err {
+  color: var(--err);
 }
 
-h1 {
-  font-size: 0.75rem;
-  text-align: center;
-  margin-bottom: 10px;
-  border-bottom: none;
-  position: relative;
-  color: var(--accent-color);
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  font-family: var(--mono-font);
-  font-weight: bold;
-  padding: 5px 8px;
-  display: inline-block;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-h1:after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -4px;
-  transform: translateX(-50%);
-  width: 60px;
-  height: 1px;
-  background-color: var(--accent-color);
-}
-
-/* Center the title container */
-.title-container {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  margin-bottom: 10px;
-}
-
-/* Hide all buttons by default */
-.controls {
-  display: none;
-}
-
-button {
-  display: none;
-}
-
-/* Remove button styling but keep the clear functionality visible */
-.clear-button {
-  display: none;
-}
-
-/* Terminal-style visualizer */
-.visualizer-container {
-  margin-top: 20px;
-  margin-bottom: 25px;
-  border: none;
-  background-color: transparent;
-  position: relative;
-  padding: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-/* Message container styling - remove box shadow */
-.message-container {
-  margin-top: 0;
-  flex: 1;
-  min-width: 0; /* Allow container to shrink below min-content if needed */
-  border: 2px solid var(--accent-color);
-  background-color: var(--panel-bg);
-  position: relative;
-  padding-top: 40px;
-  padding-left: 15px;
-  padding-right: 15px;
-  padding-bottom: 15px;
-  border-radius: 0;
-  box-shadow: none;
-  height: 280px;
-  display: flex;
-  flex-direction: column;
-}
-
-.message-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.message-header h2 {
-  margin: 0;
-  font-size: 1rem;
-  border: none;
-}
-
-/* Enhanced message display */
-.received-message {
-  display: none;
-}
-
-.received-message::-webkit-scrollbar,
-.received-message::-webkit-scrollbar-track,
-.received-message::-webkit-scrollbar-thumb,
-.received-message::-webkit-scrollbar-thumb:hover,
-.received-message:empty::before {
-  display: none;
-}
-
-/* Scrollbar styling to make it more visible */
-.received-message::-webkit-scrollbar {
-  width: 8px; /* Wider scrollbar */
-}
-
-.received-message::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.4);
-  border-left: 1px solid rgba(255, 43, 109, 0.2);
-}
-
-.received-message::-webkit-scrollbar-thumb {
-  background: var(--accent-color);
-  border-radius: 0;
-  border: 1px solid black;
-}
-
-.received-message::-webkit-scrollbar-thumb:hover {
-  background: var(--secondary-accent);
-}
-
-.timestamp {
-  font-size: 0.8em;
-  color: #888;
-  margin-top: 4px;
-  text-align: right;
-  display: block;
-  font-style: italic;
-}
-
-/* Message line with extra spacing at the end */
-.message-line {
-  margin-bottom: 16px; /* Increased spacing between messages */
-  padding-bottom: 12px;
-  width: 100%;
-  box-sizing: border-box;
-  font-family: var(--mono-font);
-  word-break: break-word;
-  display: block;
-  background-color: rgba(0, 0, 0, 0.2);
-  padding: 8px;
-  border-left: 3px solid var(--accent-color);
-  border-bottom: none; /* Removed the red underline */
-  transition: all 0.3s ease;
-  position: relative;
-  white-space: pre-wrap; /* Preserve whitespace and allow wrapping */
-  margin-top: 8px; /* Add top margin for spacing between messages */
-}
-
-/* Add extra space after each message with a pseudo-element for better visibility */
-.message-line::after {
-  content: "";
-  display: block;
-  height: 6px; /* Extra space height */
-  width: 100%;
-  position: absolute;
-  bottom: -7px;
-  left: 0;
-}
-
-/* Empty state for received message */
-.received-message:empty::before {
-  content: "NO INCOMING TRANSMISSION DETECTED...\A_ ";
-  white-space: pre;
-  color: var(--text-color);
-  opacity: 0.7;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-/* Animate cursor for emphasis */
-.terminal-cursor {
-  display: inline-block;
-  width: 10px;
-  height: 1.2em;
-  background-color: transparent;
-  vertical-align: middle;
-  margin-left: 2px;
-  animation: blink 1s step-start infinite;
-  font-weight: bold;
+.blink,
+.cursor {
+  animation: blink 1s steps(1) infinite;
 }
 
 @keyframes blink {
@@ -286,728 +38,545 @@ button {
   }
 }
 
-/* Transmit container styling - remove box shadow */
-.transmit-container {
-  margin-top: 0;
+.spacer {
   flex: 1;
-  min-width: 0; /* Allow container to shrink below min-content if needed */
-  border: 2px solid var(--accent-color);
-  background-color: var(--panel-bg);
+}
+
+/* ── top status bar ─────────────────────────────────── */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2ch;
+}
+
+.topbar > * {
+  white-space: nowrap;
+}
+
+.brand {
+  background: var(--accent);
+  color: var(--bg);
+  padding: 0 1ch;
+}
+
+.topbar .state {
+  white-space: normal;
+}
+
+/* ── panels: single-line boxes with the title set into the top border ── */
+
+.screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-areas:
+    'spec spec'
+    'log  tx'
+    'log  link';
+  gap: calc(var(--cell) * 1.5) 2ch;
+  padding-top: 8px;
+}
+
+.p-spectrum {
+  grid-area: spec;
+}
+.p-log {
+  grid-area: log;
+}
+.p-tx {
+  grid-area: tx;
+}
+.p-link {
+  grid-area: link;
+}
+
+.panel {
   position: relative;
-  padding-top: 40px;
-  padding-left: 15px;
-  padding-right: 15px;
-  padding-bottom: 15px;
-  border-radius: 0;
-  box-shadow: none;
+  min-width: 0;
+  border: 1px solid var(--line);
+  padding: var(--cell) 1ch 8px;
+  transition: border-color 0.15s;
 }
 
-textarea {
+.panel:focus-within {
+  border-color: var(--accent);
+}
+
+.panel-title {
+  position: absolute;
+  top: calc(var(--cell) / -2);
+  left: 1ch;
+  right: 1ch;
+  display: flex;
+  justify-content: space-between;
+  gap: 2ch;
+  pointer-events: none;
+  color: var(--line);
+  white-space: nowrap;
+}
+
+.panel-title > span {
+  background: var(--bg);
+  padding: 0 0.5ch;
+}
+
+.panel:focus-within .panel-title {
+  color: var(--accent);
+}
+
+.panel-name {
+  display: inline;
+  margin: 0;
+  font: inherit;
+  color: var(--fg);
+}
+
+.panel:focus-within .panel-name {
+  color: var(--accent);
+}
+
+.panel-right {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── spectrum ───────────────────────────────────────── */
+
+.spectrum {
   width: 100%;
-  height: 100px;
-  background-color: #000000;
-  color: var(--text-color);
-  border: 1px solid var(--accent-color);
-  padding: 10px;
-  font-family: var(--mono-font);
-  resize: none;
-  margin-bottom: 10px;
-  border-radius: 0; /* Removed rounded corners */
+  overflow: hidden;
 }
 
-/* Only show the transmit button */
-.transmit-container button {
+.spectrum canvas {
   display: block;
-  background-color: var(--accent-color);
-  color: var(--text-color);
-  border: 3px solid var(--secondary-accent); /* Add a border with secondary accent color */
-  padding: 10px 15px;
-  text-transform: uppercase;
-  font-weight: bold;
-  cursor: pointer;
-  width: 100%;
-  font-family: var(--mono-font);
-  letter-spacing: 1px;
-  border-radius: 0; /* Removed rounded corners */
-  box-shadow: 0 0 10px rgba(0, 240, 255, 0.3); /* Add subtle glow effect */
-  position: relative;
-  transition: all 0.2s ease;
+  image-rendering: pixelated;
+}
+
+/* ── log ────────────────────────────────────────────── */
+
+.p-log {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Fills whatever height the transmit + link column gives the row. */
+.log {
+  flex: 1 1 0;
+  min-height: calc(var(--cell) * 16);
+  overflow-y: auto;
   outline: none;
 }
 
-.transmit-container button:hover {
-  background-color: var(--terminal-red);
-  border-color: var(--terminal-red);
-  box-shadow: 0 0 15px rgba(255, 0, 60, 0.4);
+.log-row {
+  display: grid;
+  grid-template-columns: 9ch 3ch 10ch minmax(0, 1fr);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.transmit-container button:active {
-  transform: translateY(1px);
-  box-shadow: 0 0 5px rgba(255, 0, 60, 0.4);
+.log-row:hover {
+  background: var(--sel);
 }
 
-.transmit-container button:disabled {
-  background-color: var(--dark-accent);
-  border-color: var(--border-color);
-  box-shadow: none;
-  cursor: not-allowed;
-  opacity: 0.6;
+.log-time {
+  color: var(--dim);
 }
 
-/* Add highlight effect to transmit button */
-.transmit-container button::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(to right, transparent, rgba(0, 240, 255, 0.8), transparent);
+.tag-rx .log-tag {
+  color: var(--rx);
+}
+.tag-tx .log-tag {
+  color: var(--tx);
+}
+.tag-err .log-tag,
+.tag-err .log-text {
+  color: var(--err);
+}
+.tag-warn .log-tag,
+.tag-warn .log-note {
+  color: var(--warn);
+}
+.tag-sys .log-tag,
+.tag-sys .log-text {
+  color: var(--dim);
 }
 
-/* Stats container */
-.stats-container {
-  padding: 10px;
-  font-size: 0.8rem;
-  border-top: 1px solid var(--border-color);
-  color: var(--secondary-accent);
+.log-note {
+  color: var(--dim);
 }
 
-.stats-container h3 {
-  font-size: 0.9rem;
-  color: var(--accent-color);
-  margin-bottom: 5px;
-  border: none;
+.busy .log-tag {
+  animation: blink 1s steps(1) infinite;
 }
 
-.stats-container p {
-  margin: 3px 0;
-  font-family: var(--mono-font);
+.log-mode {
+  color: var(--dim);
 }
 
-/* Status indicator - position in the middle of the visualizer */
-.status-indicator {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background-color: rgba(12, 12, 20, 0.8);
-  padding: 5px 10px;
-  border: 1px solid var(--accent-color);
-  color: var(--accent-color);
-  font-size: 0.9rem;
-  animation: blink 1.5s infinite;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  border-radius: 0;
-  z-index: 10; /* Ensure it shows above the scrolling content */
+.tag-rx .log-bar {
+  color: var(--rx);
+}
+.tag-tx .log-bar {
+  color: var(--tx);
 }
 
-/* Blue styling for "Click to initiate" status */
-.status-indicator.audio-not-ready {
-  color: var(--secondary-accent);
-  border-color: var(--secondary-accent);
-  cursor: pointer;
-  animation: blink 1s infinite;
-}
-
-.status-indicator.audio-not-ready:hover {
-  background-color: rgba(0, 240, 255, 0.1);
-  box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-/* Debug panel - hide by default */
-.debug-container {
-  display: none;
-}
-
-/* FrequencyVisualizer styling */
-.frequency-visualizer {
-  height: 150px;
-  display: flex;
-  align-items: flex-end;
-  background-color: #000000;
-  padding: 5px;
-  border: none;
-  border-radius: 0;
-}
-
-.frequency-bar {
-  flex: 1;
-  background: linear-gradient(to top, 
-    var(--accent-color) 0%, 
-    var(--secondary-accent) 50%, 
-    var(--terminal-green) 100%);
-  margin: 0 1px;
-  min-width: 2px;
-  transform-origin: bottom;
-  box-shadow: 0 0 5px rgba(255, 43, 109, 0.7);
-}
-
-/* Add variation to bars based on their heights with consistent colors */
-.frequency-bar:nth-child(4n) {
-  background: linear-gradient(to top, var(--accent-color), #ff9e80);
-}
-
-.frequency-bar:nth-child(4n+1) {
-  background: linear-gradient(to top, var(--accent-color), var(--secondary-accent));
-}
-
-.frequency-bar:nth-child(4n+2) {
-  background: linear-gradient(to top, var(--accent-color), #ff80ab);
-}
-
-.frequency-bar:nth-child(4n+3) {
-  background: linear-gradient(to top, var(--accent-color), var(--terminal-green));
-}
-
-/* Frequency range information display */
-.frequency-range-info {
-  margin-top: 5px;
-  padding: 5px 10px;
-  font-size: 0.7rem;
-  color: var(--secondary-accent);
-  background-color: rgba(0, 0, 0, 0.5);
-  border-top: 1px solid var(--border-color);
-  text-align: center;
-  font-family: var(--mono-font);
-  letter-spacing: 0.5px;
-}
-
-/* Mobile responsiveness */
-@media (max-width: 768px) {
-  .app-container {
-    padding: 10px;
-  }
-  
-  h1 {
-    font-size: 1.5rem;
-  }
-  
-  /* Mobile phone mode - stack containers vertically */
-  .message-transmit-wrapper {
-    flex-direction: column;
-    gap: 15px;
-    margin-top: 15px;
-  }
-  
-  /* Adjust container heights for mobile */
-  .message-container {
-    margin-bottom: 0;
-    height: 200px; /* Smaller height on mobile */
-    flex: none; /* Don't flex-grow on mobile */
-    width: 100%; /* Full width on mobile */
-  }
-  
-  .transmit-container {
-    margin-top: 0;
-    flex: none; /* Don't flex-grow on mobile */
-    width: 100%; /* Full width on mobile */
-  }
-  
-  /* Adjust visualizer height on mobile */
-  .visualizer-container {
-    margin-bottom: 15px;
-  }
-  
-  .frequency-visualizer {
-    height: 100px; /* Smaller height on mobile */
-  }
-  
-  /* Make font sizes more readable on mobile */
-  .sent-messages-container {
-    font-size: 0.9rem;
-  }
-  
-  textarea {
-    height: 80px; /* Smaller textarea on mobile */
-    font-size: 0.9rem;
-  }
-  
-  /* Adjust message line spacing for mobile */
-  .message-line {
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-  }
-  
-  /* Adjust status indicator for mobile */
-  .status-indicator {
-    font-size: 0.8rem;
-    padding: 4px 8px;
-  }
-  
-  /* Make section titles more compact on mobile */
-  .section-title {
-    height: 25px;
-    font-size: 0.8rem;
-    line-height: 25px;
-  }
-}
-
-/* Small phones (iPhone SE, etc.) */
-@media (max-width: 375px) {
-  .app-container {
-    padding: 5px;
-  }
-  
-  .message-container {
-    height: 180px;
-    padding-top: 30px; /* Adjust for smaller title */
-    padding-left: 10px;
-    padding-right: 10px;
-  }
-  
-  .transmit-container {
-    padding-top: 30px; /* Adjust for smaller title */
-    padding-left: 10px;
-    padding-right: 10px;
-  }
-  
-  .message-transmit-wrapper {
-    gap: 10px;
-  }
-  
-  .section-title {
-    height: 22px;
-    font-size: 0.75rem;
-    line-height: 22px;
-  }
-  
-  .frequency-visualizer {
-    height: 80px;
-  }
-  
-  textarea {
-    height: 70px;
-  }
-}
-
-/* START FRESH - completely remove all conflicting title styles */
-.visualizer-container:before,
-.message-container:before,
-.transmit-container:before,
-.visualizer-container::after,
-.message-container::after,
-.transmit-container::after {
-  display: none !important;
-  content: none !important;
-  visibility: hidden !important;
-}
-
-/* ULTRA-BASIC TITLE STYLING WITH NO POSITIONING TRICKS */
-.section-title {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 30px;
-  background-color: var(--accent-color);
-  color: #000000;
-  font-weight: bold;
-  text-align: left;
-  padding-left: 15px;
-  line-height: 30px;
-  font-size: 0.9rem;
-  letter-spacing: 1px;
-  z-index: 100;
-  text-transform: uppercase;
-  border-bottom: 2px solid var(--accent-color);
-  text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
-  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.3);
-  border-radius: 0;
-}
-
-/* Remove title from frequency analyzer */
-.visualizer-container .section-title {
-  display: none;
-}
-
-/* Make sure the message container still has the right height */
-.message-container {
-  height: 280px;
-}
-
-/* Ensure black background everywhere, even when scrolling */
-html {
-  background-color: #000000;
-  min-height: 100%;
-  height: 100%;
-  overflow-x: hidden;
-  margin: 0;
-  padding: 0;
-}
-
-/* Add an :after pseudo-element that extends beyond the viewport */
-body:after {
-  content: '';
-  display: block;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: #000000;
-  z-index: -10;
-  height: 200vh; /* Extra height to cover overscroll */
-}
-
-/* Add a flex container for the message and transmit containers */
-.message-transmit-wrapper {
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  gap: 20px;
-  width: 100%;
-  margin-top: 20px;
-}
-
-/* New floating stats container */
-.floating-stats-container {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background-color: rgba(0, 0, 0, 0.7);
-  border: 1px solid var(--accent-color);
-  padding: 5px 8px;
-  z-index: 100;
-  font-size: 0.7rem;
-  color: var(--secondary-accent);
-  font-family: var(--mono-font);
-  text-transform: uppercase;
-  max-width: 150px;
-  letter-spacing: 0.5px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.stats-label {
-  color: var(--accent-color);
-  font-size: 0.75rem;
-  font-weight: bold;
-  margin-bottom: 2px;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--accent-color);
-  padding-bottom: 2px;
-}
-
-.stats-value {
-  font-size: 0.65rem;
-  white-space: nowrap;
-  color: var(--text-color);
-}
-
-/* Remove stats container from transmit container */
-.stats-container {
-  display: none;
-}
-
-/* Footer styling for attribution */
-.app-footer {
-  margin-top: 30px;
-  text-align: center;
-  font-size: 0.65rem;
-  color: var(--text-color);
-  opacity: 0.6;
-  font-family: var(--mono-font);
-  padding-bottom: 15px;
-}
-
-.app-footer a {
-  color: var(--accent-color);
-  text-decoration: none;
-  transition: opacity 0.2s ease;
-}
-
-.app-footer a:hover {
-  opacity: 1;
+.file-link {
+  color: var(--rx);
   text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
-/* Streaming message styling - enhanced to be more noticeable */
-.streaming-message {
-  position: relative;
-  background-color: rgba(0, 0, 0, 0.6);
-  border-left: 4px solid #0084ff;
-  padding-left: 8px !important;
-  animation: pulse 1.5s infinite alternate;
-  letter-spacing: 0.05em;
-  font-weight: 500;
-}
+/* ── transmit ───────────────────────────────────────── */
 
-@keyframes pulse {
-  0% {
-    border-left-color: #0084ff;
-  }
-  100% {
-    border-left-color: #00e1ff;
-  }
-}
-
-.status-indicator.streaming {
-  animation: blink 0.8s step-start infinite;
-  color: #00e1ff;
-  font-weight: bold;
-}
-
-/* Message separator for better visual distinction */
-.message-separator {
-  height: 1px;
-  margin-top: 12px;
-  margin-bottom: 8px; /* Add bottom margin for better spacing */
-  background: linear-gradient(to right, 
-    rgba(255, 43, 109, 0.7), 
-    rgba(0, 240, 255, 0.5), 
-    rgba(255, 43, 109, 0.7));
-  opacity: 0.8; /* Increased opacity */
-}
-
-/* Enhance visualization of characters in streaming mode */
-.streaming-message .timestamp {
-  background-color: rgba(0, 0, 0, 0.7); /* Darken background behind timestamp */
-  padding: 2px 5px;
-  border-radius: 2px;
-  color: #00f0ff; /* Use different color for streaming timestamps */
-}
-
-/* Add subtle highlight to newly added characters in streaming messages */
-.streaming-message:after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 5px;
-  background: linear-gradient(to bottom, transparent, var(--secondary-accent), transparent);
-  opacity: 0.7;
-  animation: highlight-pulse 1s infinite;
-}
-
-@keyframes highlight-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 0.7; }
-}
-
-/* Status indicator - make more prominent during streaming */
-.status-indicator.streaming {
-  background-color: rgba(0, 0, 0, 0.9);
-  border: 2px solid var(--secondary-accent);
-  color: var(--secondary-accent);
-  animation: blink 1s infinite;
-  z-index: 100;
-  font-weight: bold;
-}
-
-/* Add styling for the transmitting state */
-.status-indicator.transmitting {
-  background-color: rgba(0, 0, 0, 0.9);
-  border: 2px solid var(--terminal-green);
-  color: var(--terminal-green);
-  animation: none; /* No blinking for transmitting state */
-  z-index: 100;
-  font-weight: bold;
-  box-shadow: 0 0 8px rgba(0, 255, 65, 0.5); /* Add green glow */
-}
-
-/* Add styling for timeout messages */
-.timeout-message {
-  background-color: rgba(30, 0, 0, 0.6);
-  border-left: 4px solid #ff3300;
-  padding: 6px 8px;
-  margin: 6px 0;
-}
-
-/* Modify sent message styling to make it more compact */
-.sent-message {
-  color: var(--terminal-green) !important;
-  border-left: 4px solid var(--terminal-green);
-  background-color: transparent !important; /* Match parent background */
-  padding: 2px 8px; /* Reduced padding */
-  margin-left: -8px;
-  box-shadow: none; /* Remove box shadow */
-  line-height: 1.2; /* Tighter line height */
-}
-
-/* New styling for regular received messages to show them in red */
-.message-line:not(.sent-message):not(.streaming-message):not(.timeout-message) {
-  color: var(--text-color) !important;
-  border-left: 4px solid var(--terminal-red);
-  background-color: transparent !important; /* Match parent background */
-  padding: 2px 8px; /* Reduced padding */
-  margin-left: -8px;
-  box-shadow: none; /* Remove box shadow */
-  line-height: 1.2; /* Tighter line height */
-}
-
-/* Ensure ALL text within sent messages is green regardless of nesting */
-div.message-line.sent-message,
-div.message-line.sent-message *,
-div.message-line.sent-message > span {
-  color: var(--terminal-green) !important;
-}
-
-/* Additional approach - sent message direct content should be green */
-.sent-message > * {
-  color: var(--terminal-green) !important;
-}
-
-/* Specifically target [SENT] indicators to ensure they're visible */
-.sent-indicator {
-  color: var(--terminal-green) !important;
-  font-weight: bold !important;
-  text-shadow: 0 0 5px rgba(0, 255, 65, 0.3) !important;
-  animation: pulse 2s infinite;
-}
-
-/* Add a subtle pulse animation to make sent indicators more visible */
-@keyframes pulse {
-  0% { opacity: 0.8; }
-  50% { opacity: 1; }
-  100% { opacity: 0.8; }
-}
-
-/* Message timestamp styling */
-.timestamp {
-  font-size: 0.8em;
-  color: #888;
-  margin-top: 4px;
-  text-align: right;
+.field-label {
   display: block;
-  font-style: italic;
+  padding: 0;
+  margin-top: 8px;
+  color: var(--dim);
 }
 
-/* Adjust sent messages container for better compactness */
-.sent-messages-container {
-  max-height: 280px; /* Full height of the message container */
-  overflow-y: auto;
-  padding: 10px;
-  font-family: 'Unifont', 'Courier Prime', 'Courier New', monospace;
-  width: 100%;
-  border-top: none;
+.modes {
+  margin: 0 0 4px;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+
+.modes .field-label {
   margin-top: 0;
-}
-
-.sent-messages-container .message-line {
-  margin-bottom: 4px; /* Reduced margin */
-  padding: 2px 8px; /* Reduced padding */
-  box-shadow: none !important; /* Remove box shadow */
-  line-height: 1.2; /* Tighter line height */
-}
-
-/* Sent message styling (green) */
-.sent-messages-container .message-line.sent-message,
-.sent-messages-container .message-line[data-sent="true"] {
-  color: #00ff41 !important;
-  font-weight: bold !important;
-  border-left: 4px solid #00ff41 !important;
-  background-color: transparent !important;
-}
-
-/* Received message styling (red) */
-.sent-messages-container .message-line.received-message-box,
-.sent-messages-container .message-line[data-received="true"] {
-  color: var(--text-color) !important;
-  border-left: 4px solid var(--terminal-red) !important;
-  background-color: transparent !important;
-}
-
-/* Ensure all elements within received message boxes have the right color */
-.received-message-box * {
-  color: var(--text-color) !important;
-}
-
-.received-indicator {
-  color: var(--terminal-red) !important;
-  font-weight: bold !important;
-}
-
-/* HIGHEST PRIORITY SENT MESSAGE STYLING */
-.sent-message,
-[data-sent="true"],
-[class*="sent-indicator"],
-.sent-text,
-div:has([class*="sent-indicator"]),
-div:has(.sent-text) {
-  color: var(--terminal-green) !important;
-  /* Removed text-shadow */
-}
-
-/* Target specific elements with inline style */
-.message-line.sent-message,
-.message-line.sent-message *,
-.message-line[data-sent="true"],
-.message-line[data-sent="true"] * {
-  color: var(--terminal-green) !important;
-}
-
-/* Inline styles for maximum specificity */
-.sent-message,
-[data-sent="true"],
-[class*="sent-indicator"],
-.sent-text,
-div:has([class*="sent-indicator"]),
-div:has(.sent-text) {
-  color: var(--terminal-green) !important;
-  /* Removed text-shadow */
-}
-
-/* Target specific elements with inline style */
-.message-line.sent-message,
-.message-line.sent-message *,
-.message-line[data-sent="true"],
-.message-line[data-sent="true"] * {
-  color: var(--terminal-green) !important;
-}
-
-/* Add specific styling for regular received messages to make them red */
-.received-message div:not(.sent-message):not(.streaming-message):not(.timeout-message),
-div[data-testid="message-display"] div.message-line:not(.sent-message):not(.streaming-message):not(.timeout-message):not([data-sent="true"]):not(:has-text("[SENT]")) {
-  color: var(--text-color) !important;
-  border-left: 4px solid var(--terminal-red) !important;
-  background-color: transparent !important; /* Match parent background */
-  padding: 2px 8px;
   margin-bottom: 4px;
-  line-height: 1.2;
 }
 
-/* Additional mobile-specific styles that use the 'mobile' class */
-body.mobile {
-  /* Ensure no horizontal scrolling */
-  overflow-x: hidden;
+.mode-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4ch 10ch 11ch minmax(0, 1fr) 2ch;
+  align-items: center;
+  min-height: 24px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
-body.mobile .app-container {
-  /* Optimized container for mobile */
-  padding: 10px;
-  min-height: calc(100vh - 20px); /* Account for padding */
+.modes:disabled .mode-row {
+  cursor: not-allowed;
 }
 
-body.mobile .message-transmit-wrapper {
-  /* Ensure vertical layout on mobile */
-  flex-direction: column !important;
+.mode-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 
-body.mobile .floating-stats-container {
-  /* Make stats more compact on mobile */
-  top: 5px;
-  right: 5px;
-  font-size: 0.6rem;
-  max-width: 120px;
+.mode-row:hover {
+  background: var(--sel);
 }
 
-body.mobile .transmit-container button {
-  /* Make button more tappable on mobile */
-  padding: 12px 15px;
-  font-size: 0.9rem;
+.mode-row.active {
+  background: var(--sel);
+  color: var(--rx);
 }
 
-/* Ensure touch targets are large enough on mobile */
-body.mobile textarea,
-body.mobile button {
-  min-height: 44px; /* Apple's recommended minimum touch target size */
+.mode-row:focus-within {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+
+.mode-row.disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.mode-band,
+.mode-rate,
+.mode-key {
+  color: var(--dim);
+}
+
+.mode-key {
+  text-align: right;
+}
+
+.mode-hint {
+  color: var(--dim);
+  min-height: calc(var(--cell) * 2);
+}
+
+.prompt {
+  display: flex;
+  gap: 1ch;
+  margin-top: 4px;
+  padding: 4px 1ch;
+  border: 1px dashed var(--line);
+}
+
+.prompt:focus-within {
+  border-color: var(--accent);
+}
+
+.prompt-sign {
+  color: var(--accent);
+}
+
+.prompt textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  caret-color: var(--accent);
+}
+
+.prompt textarea::placeholder {
+  color: var(--dim);
+}
+
+.tx-meta {
+  color: var(--dim);
+  margin: 4px 0 8px;
+}
+
+.tx-meta.err {
+  color: var(--err);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1ch;
+}
+
+.btn {
+  max-width: 100%;
+  min-height: 24px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--sel);
+}
+
+.btn:focus-visible {
+  outline: 1px dashed var(--accent);
+}
+
+.btn:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
+.btn-primary:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--fg);
+}
+
+.key {
+  color: var(--accent);
+}
+
+.btn:disabled .key {
+  color: inherit;
+}
+
+/* ── link stats ─────────────────────────────────────── */
+
+details > summary {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 4px;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details > summary::before {
+  content: '▸ ';
+}
+
+details[open] > summary::before {
+  content: '▾ ';
+}
+
+details > summary:focus-visible {
+  outline: 1px dashed var(--accent);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 9ch minmax(0, 1fr);
+  margin-bottom: var(--cell);
+}
+
+.kv > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.stats th,
+.stats td {
+  padding: 0 0 0 1ch;
+  font-weight: normal;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stats th[scope='row'],
+.stats thead th:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.stats thead th {
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+}
+
+.stats tbody tr:first-child > * {
+  padding-top: 4px;
+}
+
+/* ── key bar ────────────────────────────────────────── */
+
+.keybar {
+  display: flex;
+  gap: 2ch;
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.keybar a {
+  color: var(--dim);
+}
+
+.keybar a:hover {
+  color: var(--accent);
+}
+
+.hotkeys .key {
+  margin-left: 1ch;
+}
+
+.hotkeys .key:first-child {
+  margin-left: 0;
+}
+
+/* ── small screens ──────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'spec' 'tx' 'log' 'link';
+  }
+
+  .log {
+    flex: none;
+    height: calc(var(--cell) * 16);
+  }
+}
+
+@media (max-width: 760px) {
+  .app {
+    padding: 8px 1ch;
+  }
+
+  .topbar-sub {
+    display: none;
+  }
+
+  .log {
+    flex: none;
+    height: calc(var(--cell) * 14);
+  }
+
+  .log-row {
+    grid-template-columns: 3ch 10ch minmax(0, 1fr);
+  }
+
+  .log-time {
+    display: none;
+  }
+
+  .mode-row {
+    grid-template-columns: 4ch 10ch minmax(0, 1fr) 0;
+  }
+
+  .mode-band,
+  .mode-key {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .stats .col-fixed {
+    display: none;
+  }
+}
+
+/* Touch: full-size targets, keeping the bracketed terminal labels. */
+@media (pointer: coarse) {
+  .mode-row,
+  .btn,
+  details > summary {
+    min-height: 44px;
+  }
+
+  .mode-row,
+  details > summary {
+    display: grid;
+    align-items: center;
+  }
+
+  .btn {
+    padding: 0 1ch;
+  }
+
+  .actions {
+    gap: 4px 1ch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blink,
+  .cursor,
+  .busy .log-tag {
+    animation: none;
+  }
+
+  .panel {
+    transition: none;
+  }
+}
+
+@media (hover: none) {
+  .hotkeys,
+  .hotkey-hint,
+  .mode-key {
+    display: none;
+  }
 }

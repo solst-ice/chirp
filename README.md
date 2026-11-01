@@ -1,26 +1,46 @@
 # Chirp: Sound-based Data Transfer
 
-This application allows you to transmit and receive data through sound. It uses a simple encoding scheme to convert text into audio frequencies, which can be played through your speakers and picked up by a microphone.
+This application transmits and receives text and small files through sound: one device plays a short burst of tones through its speaker and another decodes it from its microphone. No network, pairing or account is involved.
 
 ## Features
 
-- Real-time frequency visualization of audio input
-- Send messages by converting text to sound
-- Receive messages by listening to sound and decoding it back to text
-- Distinctive start and end signatures to mark transmissions
+- Send text (any UTF-8, including lowercase and emoji) and small files through sound
+- Three modes: **FAST** (~320 bit/s), **ROBUST** (~85 bit/s, for noisy or echoey rooms) and **INAUDIBLE** (~65 bit/s, near-ultrasonic 18–19 kHz)
+- The receiver listens for all three modes at once
+- Error correction (Reed–Solomon) plus a CRC-32 checksum: whatever the receiver shows has passed its checksum. Frames that are too damaged are reported as corrupted, but a transmission the receiver never detects (too quiet, too far, drowned out) leaves no trace
+- Transmission is one-way broadcast: the sender cannot tell whether anyone received it, so the log says "sent · delivery unconfirmed"
+- Cancel any transmission (ESC), resend files to fill gaps, and a loopback TEST that checks whether a device can hear its own signal in the selected mode
+- Terminal-style interface: a live 0–20 kHz spectrum with peak hold and a scrolling waterfall, a transfer log with progress bars, per-mode link statistics, and keyboard shortcuts
 
 ## How It Works
 
-1. **Text Encoding**: Each character is mapped to a unique frequency
-2. **Transmission**: The app plays a start signature, followed by the encoded text, and ends with an end signature
-3. **Reception**: The app listens for frequencies, looks for the start signature, decodes the frequencies back to text, and stops at the end signature
-4. **Visualization**: Real-time visualization of the frequency spectrum lets you see the data being transmitted and received
+The modem lives in [`src/modem/`](src/modem/):
+
+1. **Framing**: each message becomes a frame: an 8-symbol preamble, a 10-byte header (mode, type, length, protected by its own Reed–Solomon parity), then the payload + CRC-32 split into Reed–Solomon blocks that are byte-interleaved to spread out burst errors.
+2. **Modulation (multi-tone FSK)**: every symbol sounds one tone per group; each group picks one of 16 tones, carrying 4 bits. Even and odd symbols use two interleaved tone sets so room echoes of the previous symbol land on tones the receiver ignores. Short raised-cosine ramps between symbols avoid clicks.
+3. **Reception**: an `AudioWorklet` streams raw microphone samples to the demodulators, which use the sample count as their clock (no timers, works in background tabs). They slide a window looking for the preamble, refine the timing, then read each symbol at its known position while an early/late tracker follows clock drift between devices. Low-confidence bytes are retried as erasures during error correction.
+4. **Files**: a manifest frame (name, size, checksum) followed by numbered chunk frames, compressed with deflate when that helps. The manifest is repeated at the end, and **RESEND** reuses the 32-bit file id so a receiver can fill in chunks it missed. Receivers validate manifests against hard limits (256 KB, consistent chunk counts and exact chunk lengths) before allocating anything, cap decompression at the declared size, and keep at most eight incomplete transfers.
+5. **Transmitting**: one transmission at a time, cancellable, and it waits for any frame currently being received to finish before talking (listen before talk). Transfers longer than 15 minutes of airtime are refused.
+
+The wire format is pinned by known-answer tests (`test/wireFormat.test.ts`); it is not compatible with the earlier character-per-tone version of Chirp, so both devices need this version.
+
+| Mode | Tones | Band | Raw rate | 100-byte message |
+|---|---|---|---|---|
+| FAST | 4 at a time | 1.5–7.9 kHz | 533 bit/s | ~2.5 s |
+| ROBUST | 2 at a time | 1.5–4.7 kHz | 133 bit/s | ~9 s |
+| INAUDIBLE | 1 at a time | 18–19 kHz | 100 bit/s | ~12.5 s |
+
+INAUDIBLE is near-ultrasonic, not ultrasonic, and device-dependent: a 44.1/48 kHz sample rate does not guarantee that a phone or laptop speaker and microphone actually reproduce 18–19 kHz. Run the loopback TEST on each device first. It uses a single tone at a time because two simultaneous high tones can produce an audible difference tone through a small speaker, it will not work over Bluetooth speakers or headsets, and some young people (and most pets) can still hear it.
+
+### Security
+
+The checksum proves the data was not damaged in transit, not who sent it: anyone within earshot can transmit, and anyone within earshot can listen. Nothing is encrypted. Received text is displayed as plain text and received files are offered only as downloads (`application/octet-stream`), never opened in the page.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js (version 14 or higher)
+- Node.js 22.18 or newer (the build works on older versions, but the tests run the TypeScript sources directly)
 - npm or yarn
 
 
@@ -66,18 +86,31 @@ Then open your browser to the URL shown in the terminal (usually http://localhos
 
 ## Usage
 
-1. Click "Start Listening" to begin capturing audio
-2. Type a message in the text box at the bottom
-3. Click "Transmit Message" to send the message as sound
-4. The message will be played through your speakers and should be picked up by your microphone if it's enabled
-5. Received messages will appear in the "Received Messages" section
+1. Open the page on two devices and allow microphone access. Browsers keep audio paused until you interact with the page, so press [ START AUDIO ] in the status bar if it shows AUDIO PAUSED
+2. Pick a mode under TRANSMIT (or press alt+1/2/3); the receiver does not need to match, it listens for all modes
+3. Type a message and press Enter or [ SEND ], or use [ FILE ] / alt+f to send a file (up to 256 KB and 15 minutes of airtime; transfers over a minute ask for confirmation). ESC cancels
+4. Received messages and files appear in the LOG; click a file name to download it. A file that stops arriving is marked incomplete; [ RESEND ] / alt+r on the sender fills in the missing chunks
+5. [ TEST ] / alt+t plays a test frame and checks that the same device decodes it, which tells you whether its speaker and microphone work in that mode
+6. The status bar shows whether the microphone is live, with RETRY MIC / LISTEN / STOP as needed; without a microphone Chirp can still send
+7. The LINK panel's diagnostics show per-mode sync/frame/error counts and the signal margin of the last frame
+
+### Development
+
+```bash
+npm test        # modem, transmitter, file-transfer and wire-format tests; acoustic tests run through a simulated
+                # room (noise, echo, clock drift, dropouts, speaker band limits, speech and music interference)
+npm run bench   # delivery rate and goodput per mode under increasingly hard conditions
+npm run lint
+```
+
+The deploy workflow runs lint and tests before building. The simulator is not a substitute for real devices: it does not model actual speaker/microphone frequency responses, distortion, or OS audio processing.
 
 ## Notes
 
-- Best results are achieved in a quiet environment
-- You may need to adjust your microphone and speaker settings
+- Best results are achieved with the devices close together; move to ROBUST if FAST fails in an echoey room or with people talking nearby
+- Turn off Bluetooth audio output; keep the volume high but not distorting
+- Keep the page in the foreground: mobile browsers may suspend audio in background tabs or when the screen locks
 - Browser security may require you to explicitly grant permission to use the microphone
-- This is a proof of concept with a simplified encoding scheme
 
 ## Technologies Used
 

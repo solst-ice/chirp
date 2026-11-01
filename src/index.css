@@ -1,36 +1,86 @@
-/* Basic global styles */
-:root {
-  font-family: 'Courier New', monospace;
-  font-size: 16px;
-  line-height: 1.5;
-  font-weight: 400;
-  
-  color-scheme: dark;
-  background-color: #000000;
-  color: #e6e6fa;
-  
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* Unifont is an 8×16 bitmap face; everything is laid out on that cell grid. */
+@font-face {
+  font-family: 'Unifont';
+  src: url('/unifont.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
 }
 
-body, html {
+:root {
+  --bg: #0a0c10;
+  --fg: #c9d1d9;
+  /* Secondary text: ~6.4:1 on --bg, ~5.7:1 on --sel (WCAG AA). */
+  --dim: #8b949e;
+  /* Decorative rules and box lines only, never text. */
+  --line: #2a3140;
+  --sel: #141b26;
+  --accent: #ff2b6d;
+  --rx: #29d8ff;
+  --tx: #3ddc84;
+  --warn: #ffb000;
+  --err: #ff4d5e;
+  --cell: 16px;
+
+  color-scheme: dark;
+  font-family: 'Unifont', ui-monospace, monospace;
+  font-size: 16px;
+  line-height: var(--cell);
+  color: var(--fg);
+  background-color: var(--bg);
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  text-rendering: optimizeSpeed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
   margin: 0;
   padding: 0;
-  min-height: 100vh;
-  background-color: #000000;
+  min-height: 100%;
+  background-color: var(--bg);
 }
 
 #root {
-  width: 100%;
-  max-width: 1280px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 2rem;
 }
 
-@media (max-width: 768px) {
-  #root {
-    padding: 1rem;
-  }
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  line-height: var(--cell);
+}
+
+a {
+  color: var(--rx);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
