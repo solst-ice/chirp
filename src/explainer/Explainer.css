@@ -1,0 +1,425 @@
+/* ── explainer article ──────────────────────────────── */
+
+.explainer {
+  max-width: 76ch;
+  margin: var(--cell) auto 0;
+  padding: var(--cell) 2ch calc(var(--cell) * 2);
+  border: 1px solid var(--line);
+  outline: none;
+}
+
+.explainer h2,
+.explainer h3,
+.explainer h4 {
+  margin: 0;
+  font: inherit;
+}
+
+.ex-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2ch;
+}
+
+.ex-head h2 {
+  background: var(--accent);
+  color: var(--bg);
+  padding: 0 1ch;
+}
+
+.ex-dek {
+  color: var(--dim);
+}
+
+.explainer section {
+  margin-top: calc(var(--cell) * 2);
+}
+
+.explainer h3 {
+  color: var(--accent);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+}
+
+.explainer p {
+  margin: var(--cell) 0 0;
+}
+
+.explainer em {
+  font-style: normal;
+  color: var(--rx);
+}
+
+.ex-fix {
+  margin-top: calc(var(--cell) * 1.5) !important;
+  padding-left: 2ch;
+  border-left: 1px solid var(--line);
+}
+
+.ex-fix h4 {
+  color: var(--tx);
+}
+
+.ex-fix h4 + p {
+  margin-top: 4px;
+}
+
+.ex-list {
+  margin: var(--cell) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ex-list li {
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
+.ex-list li::before {
+  content: '✗ ';
+  color: var(--err);
+}
+
+/* ── figures ───────────────────────────────────────── */
+
+.ex-figure {
+  margin: var(--cell) 0 0;
+  padding: 8px 1ch;
+  background: #0d1016;
+  border: 1px dashed var(--line);
+}
+
+.ex-figure figcaption {
+  margin-top: 8px;
+  color: var(--dim);
+}
+
+.ex-canvas {
+  display: block;
+  width: 100%;
+}
+
+.ex-canvas + .ex-canvas {
+  margin-top: 8px;
+}
+
+.ex-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2ch;
+  margin-top: 8px;
+}
+
+.ex-controls label {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  color: var(--dim);
+}
+
+.ex-controls input[type='range'] {
+  width: min(24ch, 50vw);
+  accent-color: var(--accent);
+}
+
+.ex-readout {
+  color: var(--rx);
+}
+
+.ex-verdict {
+  margin-top: 8px !important;
+  overflow-wrap: anywhere;
+}
+
+.ex-input {
+  display: flex;
+  gap: 1ch;
+  padding: 4px 1ch;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.ex-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  caret-color: var(--accent);
+  color: var(--fg);
+}
+
+.ex-nibbles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 2ch;
+  margin-top: 8px;
+}
+
+.ex-char {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ex-glyph {
+  color: var(--fg);
+}
+
+.ex-byte {
+  display: flex;
+  gap: 2px;
+}
+
+.ex-byte .dim {
+  margin-right: 2px;
+}
+
+.ex-nib {
+  min-width: 2ch;
+  text-align: center;
+  background: var(--sel);
+  color: var(--rx);
+}
+
+/* Echo diagram */
+.ex-svg {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  font: 12px Unifont, monospace;
+}
+
+.ex-svg-dim {
+  fill: var(--dim);
+}
+
+.ex-svg-warn {
+  fill: var(--warn);
+}
+
+.ex-listen {
+  fill: none;
+  stroke: var(--dim);
+  stroke-dasharray: 2 2;
+}
+
+.ex-tone {
+  fill: var(--rx);
+}
+
+.ex-echo {
+  fill: var(--warn);
+  animation: ex-ring 1.6s ease-in-out infinite;
+}
+
+@keyframes ex-ring {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Error-correction cells: the same 30 squares move between block rows and the sending line. */
+.ex-fec {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 60px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.ex-fec:focus-visible {
+  outline: 1px dashed var(--accent);
+}
+
+.ex-cell {
+  position: absolute;
+  width: calc(100% / 30 - 2px);
+  height: 16px;
+  transition:
+    left 0.6s ease,
+    top 0.6s ease,
+    background-color 0.3s,
+    border-color 0.3s;
+  border: 1px solid currentColor;
+}
+
+.ex-cell.block-0 {
+  color: var(--rx);
+  background: var(--rx);
+}
+
+.ex-cell.block-1 {
+  color: var(--tx);
+  background: var(--tx);
+}
+
+.ex-cell.block-2 {
+  color: var(--warn);
+  background: var(--warn);
+}
+
+.ex-cell.parity {
+  background: transparent;
+}
+
+.ex-cell.bad {
+  border-color: var(--err);
+  background: var(--err);
+}
+
+.ex-cell.fixed {
+  box-shadow: 0 0 0 2px var(--fg);
+}
+
+/* Files diagram */
+.ex-files {
+  display: grid;
+  grid-template-columns: 7ch minmax(0, 1fr);
+  gap: 8px 1ch;
+  align-items: center;
+}
+
+.ex-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ex-box {
+  min-width: 3ch;
+  padding: 0 0.5ch;
+  text-align: center;
+  border: 1px solid var(--rx);
+  color: var(--rx);
+}
+
+.ex-box.manifest {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.ex-box.lost {
+  border-style: dashed;
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.ex-box.have {
+  opacity: 0.4;
+}
+
+.ex-box.filled {
+  background: var(--tx);
+  border-color: var(--tx);
+  color: var(--bg);
+}
+
+/* Modes: bands on a 0–20 kHz axis */
+.ex-modes {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 1fr);
+  gap: 4px 1ch;
+}
+
+.ex-mode {
+  display: contents;
+}
+
+.ex-mode > .dim {
+  grid-column: 2;
+  margin-bottom: 4px;
+}
+
+.ex-mode-name {
+  color: var(--rx);
+}
+
+.ex-track {
+  position: relative;
+  height: var(--cell);
+  background: var(--sel);
+}
+
+.ex-band {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  background: var(--rx);
+}
+
+.ex-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+}
+
+/* Comparison */
+.ex-compare {
+  width: 100%;
+  margin-top: var(--cell);
+  border-collapse: collapse;
+}
+
+.ex-compare th,
+.ex-compare td {
+  padding: 4px 1ch 4px 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: normal;
+  border-bottom: 1px solid var(--line);
+}
+
+.ex-compare thead th {
+  color: var(--dim);
+}
+
+.ex-compare tbody th {
+  color: var(--dim);
+}
+
+.ex-compare td:last-child {
+  color: var(--tx);
+}
+
+@media (max-width: 760px) {
+  .explainer {
+    padding: 8px 1ch var(--cell);
+    border-left: none;
+    border-right: none;
+  }
+
+  .ex-fix {
+    padding-left: 1ch;
+  }
+
+  .ex-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ex-mode > .dim {
+    grid-column: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-echo {
+    animation: none;
+    opacity: 0.4;
+  }
+
+  .ex-cell {
+    transition: none;
+  }
+}

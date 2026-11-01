@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Spectrum from './components/Spectrum';
 import { play, startCapture, type Capture } from './audio/audioIO';
 import {
@@ -14,6 +14,9 @@ import {
 import { MODEMS, getModem } from './modem/profiles';
 import { FrameType, type DemodEvent, type Demodulator, type Modem } from './modem/types';
 import { Transmitter, airtimeOf, type SendingState, type TxState } from './transfer/transmitter';
+
+// Loaded on demand: most visits never open it.
+const Explainer = lazy(() => import('./explainer/Explainer'));
 
 // Audio signal favicon SVG data - base64 encoded for direct use
 const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIGZpbGw9IiMxMzEzMTMiLz4KICA8IS0tIFRocmVlIHNpZ25hbCBiYXJzIHdpdGggc29saWQgY29sb3JzIC0tPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiByeD0iMiIgZmlsbD0iI2ZmNDFiNCIvPiA8IS0tIFBpbmsgLS0+CiAgPHJlY3QgeD0iMjciIHk9IjMwIiB3aWR0aD0iMTAiIGhlaWdodD0iMjIiIHJ4PSIyIiBmaWxsPSIjMDBmZmFhIi8+IDwhLS0gR3JlZW4gLS0+CiAgPHJlY3QgeD0iNDIiIHk9IjE4IiB3aWR0aD0iMTAiIGhlaWdodD0iMzQiIHJ4PSIyIiBmaWxsPSIjMzE4NWZmIi8+IDwhLS0gQmx1ZSAtLT4KPC9zdmc+`;
@@ -235,6 +238,7 @@ function App() {
   const [announcement, setAnnouncement] = useState('');
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px)').matches);
   const [spectrumOpen, setSpectrumOpen] = useState(() => window.matchMedia(ROOMY_QUERY).matches);
+  const [explainOpen, setExplainOpen] = useState(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1121,6 +1125,12 @@ function App() {
         </div>
       </main>
 
+      {explainOpen && (
+        <Suspense fallback={<p className="dim">loading explanation…</p>}>
+          <Explainer busy={txBusy} onClose={() => setExplainOpen(false)} />
+        </Suspense>
+      )}
+
       <footer className="keybar">
         <span className="hotkeys">
           <span className="key">⏎</span> send <span className="key">esc</span> cancel <span className="key">/</span> focus{' '}
@@ -1128,6 +1138,9 @@ function App() {
           <span className="key">alt+r</span> resend <span className="key">alt+t</span> test
         </span>
         <span className="spacer" />
+        <button className="btn explain-toggle" onClick={() => setExplainOpen((open) => !open)} aria-expanded={explainOpen}>
+          [ ? {explainOpen ? 'HIDE EXPLANATION' : 'EXPLAIN THIS'} ]
+        </button>
         <span className="credits">
           built by{' '}
           <a href="https://x.com/icesolst" target="_blank" rel="noopener noreferrer">

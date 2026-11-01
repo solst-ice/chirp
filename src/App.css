@@ -512,6 +512,10 @@ details > summary:focus-visible {
   color: var(--accent);
 }
 
+.explain-toggle {
+  color: var(--accent);
+}
+
 .hotkeys .key {
   margin-left: 1ch;
 }
@@ -555,6 +559,12 @@ details > summary:focus-visible {
 
   .topbar-sub {
     display: none;
+  }
+
+  .keybar {
+    flex-wrap: wrap;
+    align-items: center;
+    white-space: normal;
   }
 
   .log {

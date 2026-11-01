@@ -1,0 +1,667 @@
+// The explainer's figures. Each one computes what it shows from the real code
+// (version 1's character map, the FFT, today's modem) rather than a mock-up.
+
+import { useMemo, useRef, useState } from 'react';
+import { frameBytes, frameTones } from '../modem/mfsk';
+import { MODEMS, PROFILES, getModem } from '../modem/profiles';
+import { FrameType } from '../modem/types';
+import Canvas, { type Draw } from './Canvas';
+import { SAMPLE_RATE, V1, V1_FREQUENCIES, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
+import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
+import { playTone, playV1 } from './sound';
+
+const CELL = 8;
+const enc = new TextEncoder();
+const hex = (b: number) => b.toString(16).padStart(2, '0');
+
+const text = (ctx: CanvasRenderingContext2D, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') => {
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.fillText(s, x, y);
+  ctx.textAlign = 'left';
+};
+
+/* ── 1 · a tone, sampled ─────────────────────────────── */
+
+export function ToneFigure({ busy }: { busy: boolean }) {
+  const [position, setPosition] = useState(0.6);
+  const hz = Math.round(100 * Math.pow(90, position));
+
+  const draw: Draw = (ctx, w, h, ms) => {
+    const p = palette();
+    const span = 0.001;
+    const shift = ms < 0 ? 0 : (ms / 1000) * span * 0.2;
+    const mid = (h - 20) / 2;
+    const amp = mid * 0.8;
+    const y = (t: number) => mid - amp * Math.sin(2 * Math.PI * hz * (t + shift));
+    ctx.strokeStyle = p.line;
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(w, mid);
+    ctx.stroke();
+    ctx.strokeStyle = p.dim;
+    ctx.beginPath();
+    for (let x = 0; x <= w; x++) {
+      const v = y((x / w) * span);
+      if (x === 0) ctx.moveTo(x, v);
+      else ctx.lineTo(x, v);
+    }
+    ctx.stroke();
+    // The microphone only ever sees these points.
+    ctx.fillStyle = p.rx;
+    for (let i = 0; i < span * SAMPLE_RATE; i++) {
+      const t = i / SAMPLE_RATE;
+      ctx.fillRect((t / span) * w - 1.5, y(t) - 1.5, 3, 3);
+    }
+    text(ctx, '0 ms', 0, h - 16, p.dim);
+    text(ctx, '1 ms', w, h - 16, p.dim, 'right');
+  };
+
+  return (
+    <figure className="ex-figure">
+      <Canvas height={130} label={`A ${hz} Hz sine wave and the samples a microphone takes of it`} draw={draw} animate redraw={hz} />
+      <div className="ex-controls">
+        <label>
+          pitch{' '}
+          <input type="range" min={0} max={1} step={0.001} value={position} onChange={(e) => setPosition(Number(e.target.value))} />
+        </label>
+        <span className="ex-readout">{hz.toLocaleString()} Hz</span>
+        <button className="btn" disabled={busy} onClick={() => void playTone(hz)}>
+          [ ▶ HEAR IT ]
+        </button>
+      </div>
+      <figcaption>
+        Each dot is one sample: the microphone measures the air pressure 48,000 times a second. Slide up and the wave squeezes
+        together.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 2 · version 1: a pitch per character ────────────── */
+
+const DEMO = 'HELLO';
+const MAP_MAX_HZ = 9000;
+
+function v1Timeline(word: string) {
+  const segments: { label: string; hz: number; t0: number; dur: number; marker?: boolean }[] = [];
+  let t = 0;
+  segments.push({ label: 'start', hz: V1.start, t0: t, dur: V1.markerSeconds, marker: true });
+  t += V1.markerSeconds + V1.gapSeconds;
+  for (const c of word) {
+    segments.push({ label: c, hz: V1_FREQUENCIES.get(c)!, t0: t, dur: V1.toneSeconds });
+    t += V1.toneSeconds + V1.gapSeconds;
+  }
+  segments.push({ label: 'end', hz: V1.end, t0: t, dur: V1.markerSeconds, marker: true });
+  return { segments, total: t + V1.markerSeconds };
+}
+
+export function V1Figure({ busy }: { busy: boolean }) {
+  const { segments, total } = useMemo(() => v1Timeline(DEMO), []);
+
+  const drawMap: Draw = (ctx, w, h) => {
+    const p = palette();
+    const x = (hz: number) => 4 + (hz / MAP_MAX_HZ) * (w - 8);
+    const axis = 34;
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, axis, w, 1);
+    const used = new Set(DEMO);
+    for (const [c, hz] of V1_FREQUENCIES) {
+      ctx.fillStyle = used.has(c) ? p.rx : p.dim;
+      ctx.fillRect(Math.round(x(hz)), axis - (used.has(c) ? 14 : 6), 1, used.has(c) ? 14 : 6);
+      if (used.has(c)) text(ctx, c, x(hz), axis - 32, p.rx, 'center');
+    }
+    for (const hz of [V1.start, V1.end]) {
+      ctx.fillStyle = p.accent;
+      ctx.fillRect(Math.round(x(hz)), axis - 14, 1, 14);
+    }
+    text(ctx, 'start/end', x(2600), axis - 32, p.accent, 'center');
+    const groups: [string, number][] = [
+      ['␠', 900],
+      ['symbols', 3000],
+      ['0–9', 5150],
+      ['A–Z', 6950],
+    ];
+    for (const [label, hz] of groups) text(ctx, label, x(hz), axis + 6, p.dim, 'center');
+    text(ctx, '9 kHz', w, h - 16, p.dim, 'right');
+    text(ctx, '0', 0, h - 16, p.dim);
+  };
+
+  const drawTimeline: Draw = (ctx, w, h, ms) => {
+    const p = palette();
+    const slow = 3;
+    const now = ms < 0 ? Infinity : ((ms / 1000 / slow) % (total + 0.5)) - 0.1;
+    const plotTop = 18;
+    const plotBottom = h - 30;
+    const lo = 2000;
+    const hi = 8600;
+    const x = (t: number) => (t / total) * w;
+    const y = (hz: number) => plotBottom - ((hz - lo) / (hi - lo)) * (plotBottom - plotTop);
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, plotBottom + 4, w, 1);
+
+    let heard = 0;
+    let lastL = -1;
+    let dropped = -1;
+    segments.forEach((s, i) => {
+      const done = now >= s.t0 + s.dur / 2;
+      const color = s.marker ? p.accent : p.rx;
+      ctx.globalAlpha = done ? 1 : 0.3;
+      ctx.fillStyle = color;
+      ctx.fillRect(x(s.t0), y(s.hz) - 3, Math.max(2, x(s.dur) - 1), 6);
+      text(ctx, s.label, x(s.t0 + s.dur / 2), y(s.hz) - 22, color, 'center');
+      ctx.globalAlpha = 1;
+      if (!s.marker && done) {
+        heard = i;
+        if (s.label === 'L' && lastL >= 0 && s.t0 - segments[lastL].t0 < V1.lockoutMs / 1000) dropped = i;
+        if (s.label === 'L') lastL = i;
+      }
+    });
+    if (now <= total) {
+      ctx.fillStyle = p.fg;
+      ctx.fillRect(x(Math.max(0, now)), plotTop - 6, 1, plotBottom - plotTop + 10);
+    }
+
+    // What version 1's receiver printed.
+    let cx = 0;
+    text(ctx, 'heard:', cx, h - 18, p.dim);
+    cx += 7 * CELL;
+    for (let i = 1; i <= heard; i++) {
+      const c = segments[i].label;
+      const lost = i === dropped;
+      text(ctx, c, cx, h - 18, lost ? p.err : p.fg);
+      if (lost) {
+        ctx.fillStyle = p.err;
+        ctx.fillRect(cx - 1, h - 10, CELL + 2, 1);
+      }
+      cx += 2 * CELL;
+    }
+    if (dropped > 0 && now >= total) text(ctx, '← second L dropped', cx + CELL, h - 18, p.err);
+  };
+
+  return (
+    <figure className="ex-figure">
+      <Canvas height={56} label="Version 1 character map: every character at its own pitch, 100 Hz apart" draw={drawMap} />
+      <Canvas height={150} label="HELLO in version 1: a start tone, one tone per letter, an end tone" draw={drawTimeline} animate />
+      <div className="ex-controls">
+        <button className="btn" disabled={busy} onClick={() => void playV1(DEMO)}>
+          [ ▶ HEAR HELLO, VERSION 1 ]
+        </button>
+      </div>
+      <figcaption>
+        Each letter is 70 ms of one pitch, then 30 ms of quiet; slowed down 3× here. The receiver ignores a letter it heard less
+        than {V1.lockoutMs} ms ago, so one long tone isn't counted twice. The second L often fell inside that window and
+        vanished.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 3 · the FFT ─────────────────────────────────────── */
+
+export function FftFigure() {
+  const [noise, setNoise] = useState(2);
+  const ref = useRef<HTMLElement>(null);
+  const visible = useVisible(ref);
+  const reduced = useReducedMotion();
+  const tick = useTicker(250, visible && !reduced);
+  const letter = DEMO[Math.floor(tick / 6) % DEMO.length];
+  const sent = V1_FREQUENCIES.get(letter)!;
+  const { samples, spec, peak } = useMemo(() => {
+    const samples = captureWindow(sent, noise, tick + 1);
+    const spec = spectrum(samples, MAP_MAX_HZ);
+    return { samples, spec, peak: loudestHz(spec) };
+  }, [sent, noise, tick]);
+  const heard = v1CharAt(peak);
+  const ok = heard === letter;
+  const snr = noise > 0 ? 10 * Math.log10(0.5 / (noise * noise)) : Infinity;
+
+  const draw: Draw = (ctx, w, h) => {
+    const p = palette();
+    // Top: 2 ms of what the microphone delivers.
+    const waveH = 50;
+    const shown = 96;
+    let maxAbs = 1.2;
+    for (let i = 0; i < shown; i++) maxAbs = Math.max(maxAbs, Math.abs(samples[i]));
+    ctx.strokeStyle = p.dim;
+    ctx.beginPath();
+    for (let i = 0; i < shown; i++) {
+      const px = (i / (shown - 1)) * w;
+      const py = waveH / 2 - (samples[i] / maxAbs) * (waveH / 2 - 2);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    text(ctx, 'samples in', 0, waveH + 2, p.dim);
+    text(ctx, '↓ FFT', w / 2, waveH + 2, p.accent, 'center');
+
+    // Bottom: how much of each frequency is in the window.
+    const top = waveH + 24;
+    const bottom = h - 20;
+    let maxMag = 1;
+    for (const v of spec) maxMag = Math.max(maxMag, v);
+    const bx = (k: number) => (k / spec.length) * w;
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, bottom, w, 1);
+    ctx.fillStyle = p.dim;
+    for (let k = 0; k < spec.length; k++) {
+      const bh = (spec[k] / maxMag) * (bottom - top);
+      ctx.fillRect(bx(k), bottom - bh, Math.max(1, bx(1) - 0.5), bh);
+    }
+    const sentX = (sent / MAP_MAX_HZ) * w;
+    ctx.fillStyle = p.tx;
+    for (let yy = top; yy < bottom; yy += 6) ctx.fillRect(sentX, yy, 1, 3);
+    const peakX = (peak / MAP_MAX_HZ) * w;
+    const peakH = (spec[Math.round(peak / (SAMPLE_RATE / 2048))] / maxMag) * (bottom - top);
+    ctx.fillStyle = ok ? p.tx : p.err;
+    ctx.fillRect(peakX - 1, bottom - peakH, 3, peakH);
+    text(ctx, 'loudest', Math.min(w - 32, Math.max(32, peakX)), Math.max(top - 2, bottom - peakH - 18), ok ? p.tx : p.err, 'center');
+    for (const k of [0, 3, 6, 9]) text(ctx, `${k}k`, (k * 1000 * w) / MAP_MAX_HZ, h - 16, p.dim, k === 0 ? 'left' : k === 9 ? 'right' : 'center');
+  };
+
+  return (
+    <figure className="ex-figure" ref={ref}>
+      <Canvas height={210} label="Microphone samples turned into a spectrum by an FFT; the loudest peak picks the letter" draw={draw} redraw={`${tick}|${noise}`} />
+      <div className="ex-controls">
+        <label>
+          hiss <input type="range" min={0} max={12} step={0.25} value={noise} onChange={(e) => setNoise(Number(e.target.value))} />
+        </label>
+        <span className="ex-readout">{snr === Infinity ? 'silent room' : snr >= 0 ? `tone ${snr.toFixed(0)} dB louder` : `hiss ${(-snr).toFixed(0)} dB louder than the tone`}</span>
+      </div>
+      <p className={`ex-verdict ${ok ? 'ok' : 'err'}`} aria-live="off">
+        sent {letter} ({sent.toLocaleString()} Hz) · loudest {Math.round(peak).toLocaleString()} Hz → {heard ?? 'nothing'} {ok ? '✓' : '✗'}
+      </p>
+    </figure>
+  );
+}
+
+/* ── 5a · bytes and nibbles ──────────────────────────── */
+
+export const MAX_DEMO_BYTES = 40;
+
+export function NibbleFigure({ value, onChange }: { value: string; onChange: (s: string) => void }) {
+  const chars = Array.from(value);
+  const total = enc.encode(value).length;
+  return (
+    <figure className="ex-figure">
+      <label className="ex-input">
+        <span aria-hidden="true">&gt;</span>
+        <input
+          value={value}
+          spellCheck={false}
+          aria-label="Text to encode"
+          onChange={(e) => enc.encode(e.target.value).length <= MAX_DEMO_BYTES && onChange(e.target.value)}
+        />
+      </label>
+      <div className="ex-nibbles">
+        {chars.map((c, i) => (
+          <div className="ex-char" key={i}>
+            <span className="ex-glyph">{c === ' ' ? '␠' : c}</span>
+            {Array.from(enc.encode(c)).map((b, j) => (
+              <span className="ex-byte" key={j}>
+                <span className="dim">{hex(b)}</span>
+                <span className="ex-nib">{b >> 4}</span>
+                <span className="ex-nib">{b & 15}</span>
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+      <figcaption>
+        {total} bytes → {total * 2} nibbles, each a number from 0 to 15, so each is one of 16 tones. Try lowercase or an emoji:
+        version 1 had no pitch for them.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 5b · the frame on the wire ──────────────────────── */
+
+/** Bytes as quoted text, or nothing when they split a multi-byte character. */
+const quoted = (bytes: number[]) => {
+  try {
+    return ` "${new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes))}"`;
+  } catch {
+    return ' (part of a character)';
+  }
+};
+
+const FAST = PROFILES[0];
+const PREAMBLE_SLOTS = 8;
+const HEADER_BYTES = 10;
+type Role = 'sync' | 'header' | 'message' | 'check' | 'repair' | 'pad';
+
+export function FrameFigure({ value }: { value: string }) {
+  const ref = useRef<HTMLElement>(null);
+  const visible = useVisible(ref);
+  const reduced = useReducedMotion();
+  const slotMs = (FAST.symbolSeconds + FAST.guardSeconds) * 1000;
+  const tick = useTicker(slotMs * 10, visible && !reduced);
+  const { tones, bytes, roles, payload } = useMemo(() => {
+    const payload = enc.encode(value);
+    const frame = { type: FrameType.Text, payload };
+    const tones = frameTones(FAST, frame);
+    const bytes = frameBytes(FAST, frame);
+    const role = (byte: number): Role =>
+      byte < HEADER_BYTES ? 'header' : byte < HEADER_BYTES + payload.length ? 'message' : byte < HEADER_BYTES + payload.length + 4 ? 'check' : byte < bytes.length ? 'repair' : 'pad';
+    const roles = tones.map((_, s): Role => (s < PREAMBLE_SLOTS ? 'sync' : role((s - PREAMBLE_SLOTS) * 2)));
+    return { tones, bytes, roles, payload };
+  }, [value]);
+  const n = tones.length;
+  const current = reduced ? -1 : tick % (n + 4);
+  const bytesPerSlot = FAST.groups / 2;
+
+  const colors = () => {
+    const p = palette();
+    return { sync: p.accent, header: p.warn, message: p.rx, check: p.tx, repair: p.fg, pad: p.dim } satisfies Record<Role, string>;
+  };
+  const LABELS: Record<Role, string> = { sync: 'sync', header: 'header', message: 'message', check: 'checksum', repair: 'repair bytes', pad: '' };
+
+  const draw: Draw = (ctx, w, h) => {
+    const p = palette();
+    const c = colors();
+    const left = 5 * CELL;
+    const top = 6;
+    const bottom = h - 40;
+    const colW = (w - left) / n;
+    const bins = 16 * FAST.groups * 2;
+    const y = (bin: number) => bottom - ((bin + 0.5) / bins) * (bottom - top);
+    const khz = (hz: number) => `${(Math.round(hz / 100) / 10).toFixed(1)}k`;
+    text(ctx, khz(FAST.baseFrequency + (bins - 1) * FAST.toneSpacing), 0, top, p.dim);
+    text(ctx, khz(FAST.baseFrequency), 0, bottom - 14, p.dim);
+    if (current >= 0 && current < n) {
+      ctx.fillStyle = p.sel;
+      ctx.fillRect(left + current * colW, top, colW, bottom - top);
+    }
+    for (let s = 0; s < n; s++) {
+      ctx.globalAlpha = current < 0 || s <= current || current >= n ? 1 : 0.25;
+      ctx.fillStyle = s === current ? p.fg : c[roles[s]];
+      for (const bin of tones[s]) ctx.fillRect(left + s * colW + 0.5, y(bin) - 1.5, Math.max(1, colW - 1), 3);
+    }
+    ctx.globalAlpha = 1;
+    // Which part of the frame each slot carries.
+    let start = 0;
+    for (let s = 1; s <= n; s++) {
+      if (s < n && roles[s] === roles[start]) continue;
+      const x0 = left + start * colW;
+      const x1 = left + s * colW;
+      ctx.fillStyle = c[roles[start]];
+      ctx.globalAlpha = 0.7;
+      ctx.fillRect(x0 + 1, bottom + 6, x1 - x0 - 2, 6);
+      ctx.globalAlpha = 1;
+      const label = LABELS[roles[start]];
+      if (label && label.length * CELL < x1 - x0) text(ctx, label, (x0 + x1) / 2, bottom + 18, c[roles[start]], 'center');
+      start = s;
+    }
+  };
+
+  let readout = `${payload.length} bytes of text become ${n} slots of ${slotMs} ms = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`;
+  if (current >= 0 && current < n) {
+    const values = tones[current].map((bin) => Math.floor((bin >> 1) / FAST.groups));
+    if (roles[current] === 'sync') readout = `slot ${current + 1} · tones ${values.join(' · ')} · a fixed pattern that marks the start`;
+    else {
+      const first = (current - PREAMBLE_SLOTS) * bytesPerSlot;
+      const slice = Array.from(bytes.subarray(first, first + bytesPerSlot));
+      const asText = roles[current] === 'message' ? quoted(slice.filter((_, i) => first + i < HEADER_BYTES + payload.length)) : '';
+      readout = `slot ${current + 1} · tones ${values.join(' · ')} → bytes ${slice.map(hex).join(' ')} · ${LABELS[roles[current]] || 'padding'}${asText}`;
+    }
+  }
+
+  return (
+    <figure className="ex-figure" ref={ref}>
+      <Canvas height={230} label={`Your text as FAST sends it: ${n} slots of four tones each`} draw={draw} redraw={`${current}|${value}`} />
+      <p className="ex-verdict dim">{readout}</p>
+      <figcaption>
+        Your text above, exactly as FAST sends it, slowed down 10×. Time runs left to right, pitch bottom to top. Every column is
+        one slot with four tones.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 5c · echoes and alternating tone sets ───────────── */
+
+export function EchoFigure() {
+  const [alternate, setAlternate] = useState(true);
+  const rows = 8;
+  const rowH = 16;
+  const top = 22;
+  const label = (r: number) => `${r % 2 ? 'B' : 'A'}${r >> 1}`;
+  const rowY = (r: number) => top + (rows - 1 - r) * rowH;
+  const slot1 = { x: 40, w: 120 };
+  const slot2 = { x: 190, w: 120 };
+  const sent1 = 2; // A1
+  const sent2 = alternate ? 5 : 4; // B2 or A2
+  const listening = Array.from({ length: rows }, (_, r) => r).filter((r) => (alternate ? r % 2 === 1 : r % 2 === 0));
+  return (
+    <figure className="ex-figure">
+      <svg className="ex-svg" viewBox="0 0 320 172" role="img" aria-label="An echo of the previous slot landing on a tone the receiver does or does not listen to">
+        <text x={slot1.x + slot1.w / 2} y={12} className="ex-svg-dim" textAnchor="middle">
+          slot 1
+        </text>
+        <text x={slot2.x + slot2.w / 2} y={12} className="ex-svg-dim" textAnchor="middle">
+          slot 2
+        </text>
+        {Array.from({ length: rows }, (_, r) => (
+          <text key={r} x={0} y={rowY(r) + 12} className="ex-svg-dim">
+            {label(r)}
+          </text>
+        ))}
+        {listening.map((r) => (
+          <rect key={r} x={slot2.x} y={rowY(r) + 2} width={slot2.w} height={rowH - 4} className="ex-listen" />
+        ))}
+        <rect x={slot1.x} y={rowY(sent1) + 4} width={slot1.w} height={rowH - 8} className="ex-tone" />
+        <rect x={slot1.x + slot1.w} y={rowY(sent1) + 4} width={slot2.x + 70 - slot1.x - slot1.w} height={rowH - 8} className="ex-echo" />
+        <text x={slot2.x + 76} y={rowY(sent1) + 12} className="ex-svg-warn">
+          echo
+        </text>
+        <rect x={slot2.x} y={rowY(sent2) + 4} width={slot2.w} height={rowH - 8} className="ex-tone" />
+        <text x={0} y={top + rows * rowH + 14} className="ex-svg-dim">
+          dashed: rows the receiver reads in slot 2
+        </text>
+      </svg>
+      <div className="ex-controls">
+        <button className="btn" onClick={() => setAlternate((a) => !a)} aria-pressed={alternate}>
+          [ alternating sets: {alternate ? 'ON' : 'OFF'} ]
+        </button>
+      </div>
+      <p className={`ex-verdict ${alternate ? 'ok' : 'err'}`}>
+        {alternate
+          ? 'The echo rings on A1, a row slot 2 never reads: it cannot be mistaken for data.'
+          : 'The echo on A1 competes with the real tone on A2: slot 2 might be read as 1 instead of 2.'}
+      </p>
+    </figure>
+  );
+}
+
+/* ── 5d · finding the start ──────────────────────────── */
+
+const SYNC_PATTERN = [0, 11, 3, 14, 6, 9, 1, 12];
+const STREAM_LENGTH = 40;
+const SYNC_AT = 19;
+
+export function SyncFigure() {
+  const { stream, scores, order, reach } = useMemo(() => {
+    const r = rng(7);
+    const stream = Array.from({ length: STREAM_LENGTH }, () => Math.floor(r() * 16));
+    SYNC_PATTERN.forEach((v, i) => (stream[SYNC_AT + i] = v));
+    const offsets = STREAM_LENGTH - SYNC_PATTERN.length + 1;
+    const scores = Array.from({ length: offsets }, (_, o) => SYNC_PATTERN.filter((v, i) => stream[o + i] === v).length / SYNC_PATTERN.length);
+    // Sweep, hold on the lock, sweep on, pause.
+    const order = [...Array.from({ length: SYNC_AT + 1 }, (_, o) => o), ...Array(8).fill(SYNC_AT), ...Array.from({ length: offsets - SYNC_AT - 1 }, (_, o) => SYNC_AT + 1 + o), ...Array(4).fill(-1)];
+    // How far the window has reached by each step, so the score graph only shows positions already tried.
+    const reach = order.map((_, s) => Math.max(...order.slice(0, s + 1)) + 1);
+    return { stream, scores, order, reach };
+  }, []);
+
+  const draw: Draw = (ctx, w, h, ms) => {
+    const p = palette();
+    const step = ms < 0 ? -2 : Math.floor(ms / 200) % order.length;
+    const offset = step === -2 ? SYNC_AT : order[step];
+    const seen = step === -2 ? scores.length : reach[step];
+    const colW = w / STREAM_LENGTH;
+    const lane = 64;
+    const vy = (v: number) => 4 + (15 - v) * ((lane - 8) / 15);
+    if (offset >= 0) {
+      ctx.strokeStyle = p.accent;
+      ctx.strokeRect(offset * colW + 0.5, 0.5, SYNC_PATTERN.length * colW - 1, lane);
+    }
+    stream.forEach((v, i) => {
+      const inWindow = offset >= 0 && i >= offset && i < offset + SYNC_PATTERN.length;
+      const match = inWindow && SYNC_PATTERN[i - offset] === v;
+      ctx.fillStyle = match ? p.tx : inWindow ? p.fg : p.dim;
+      ctx.fillRect(i * colW + colW / 2 - 2, vy(v) - 2, 4, 4);
+      if (inWindow) {
+        ctx.strokeStyle = p.accent;
+        ctx.strokeRect(i * colW + colW / 2 - 3.5, vy(SYNC_PATTERN[i - offset]) - 3.5, 7, 7);
+      }
+    });
+    // Match score at every position tried so far.
+    const graphTop = lane + 12;
+    const graphBottom = h - 20;
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, graphBottom, w, 1);
+    for (let o = 0; o < seen && o < scores.length; o++) {
+      const bh = scores[o] * (graphBottom - graphTop);
+      ctx.fillStyle = scores[o] === 1 ? p.tx : o === offset ? p.accent : p.dim;
+      ctx.fillRect(o * colW + 1, graphBottom - bh, colW - 2, bh);
+    }
+    const locked = offset === SYNC_AT || offset < 0;
+    text(ctx, locked ? 'match 8/8 · locked: the message starts here' : `match ${Math.round(scores[Math.max(0, offset)] * 8)}/8`, 0, h - 16, locked ? p.tx : p.dim);
+  };
+
+  return (
+    <figure className="ex-figure">
+      <Canvas height={170} label="The receiver slides the known start pattern along what it hears until all eight slots match" draw={draw} animate />
+      <figcaption>
+        Top: one tone per slot as heard (pink boxes are the pattern being tried). Bottom: how many of the 8 slots match at each
+        position.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 5e · error correction and interleaving ──────────── */
+
+const FEC_BLOCKS = 3;
+const FEC_DATA = 6;
+const FEC_PARITY = 4;
+const FEC_N = FEC_DATA + FEC_PARITY;
+const FEC_TOTAL = FEC_BLOCKS * FEC_N;
+const BURST = new Set([11, 12, 13, 14, 15]);
+const FEC_STEPS = [
+  `${FEC_BLOCKS} blocks: ${FEC_DATA} data bytes + ${FEC_PARITY} repair bytes each, enough to fix any ${FEC_PARITY / 2} bad bytes in a block`,
+  'sent interleaved: one byte from each block in turn',
+  `a burst of noise wrecks ${BURST.size} bytes in a row`,
+  `back in blocks, no block lost more than ${FEC_PARITY / 2}`,
+  'Reed–Solomon repairs every block, and the CRC-32 checksum confirms ✓',
+];
+
+export function FecFigure() {
+  const ref = useRef<HTMLElement>(null);
+  const visible = useVisible(ref);
+  const reduced = useReducedMotion();
+  const [manual, setManual] = useState(0);
+  const tick = useTicker(1800, visible && !reduced);
+  const step = (tick + manual) % FEC_STEPS.length;
+  const inLine = step === 1 || step === 2;
+  return (
+    <figure className="ex-figure" ref={ref}>
+      <button className="ex-fec" onClick={() => setManual((m) => m + 1)} aria-label="Next step">
+        {Array.from({ length: FEC_TOTAL }, (_, i) => {
+          const b = i % FEC_BLOCKS;
+          const j = Math.floor(i / FEC_BLOCKS);
+          const sendIndex = j * FEC_BLOCKS + b;
+          const col = inLine ? sendIndex : FEC_N + j;
+          const row = inLine ? 1 : b;
+          const hit = BURST.has(sendIndex);
+          const state = hit && (step === 2 || step === 3) ? ' bad' : hit && step === 4 ? ' fixed' : '';
+          return (
+            <span
+              key={i}
+              className={`ex-cell block-${b}${j >= FEC_DATA ? ' parity' : ''}${state}`}
+              style={{ left: `calc(${(col / FEC_TOTAL) * 100}% + 1px)`, top: row * 20 }}
+            />
+          );
+        })}
+      </button>
+      <p className="ex-verdict" aria-live="polite">
+        {step + 1}/{FEC_STEPS.length} · {FEC_STEPS[step]}
+      </p>
+      <figcaption>
+        Without interleaving the burst would land in one block: {BURST.size} bad bytes, more than its repair bytes can fix. Click
+        to step.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 5f · files ──────────────────────────────────────── */
+
+export function FilesFigure() {
+  const parts = ['M', '0', '1', '2', '3', 'M'];
+  return (
+    <figure className="ex-figure">
+      <div className="ex-files">
+        <span className="dim">send</span>
+        <span className="ex-row">
+          {parts.map((part, i) => (
+            <span key={i} className={`ex-box${part === 'M' ? ' manifest' : ''}${i === 3 ? ' lost' : ''}`}>
+              {i === 3 ? '✗' : part}
+            </span>
+          ))}
+        </span>
+        <span className="dim">resend</span>
+        <span className="ex-row">
+          {parts.map((part, i) => (
+            <span key={i} className={`ex-box${part === 'M' ? ' manifest' : ''}${i === 3 ? ' filled' : ' have'}`}>
+              {part}
+            </span>
+          ))}
+        </span>
+        <span className="dim">result</span>
+        <span className="ok">✓ photo.jpg · every chunk present, checksum ok</span>
+      </div>
+      <figcaption>M is the manifest (name, size, checksum); 0–3 are numbered chunks. A resend only has to fill the gap.</figcaption>
+    </figure>
+  );
+}
+
+/* ── 5g · modes ──────────────────────────────────────── */
+
+const SPECTRUM_TOP = 20000;
+const goodput = (id: string) => Math.round(800 / getModem(id).airtime(100));
+
+export function ModesFigure() {
+  return (
+    <figure className="ex-figure">
+      <div className="ex-modes">
+        {MODEMS.map((m, i) => {
+          const profile = PROFILES[i];
+          const [lo, hi] = m.band;
+          return (
+            <div className="ex-mode" key={m.id}>
+              <span className="ex-mode-name">{m.label}</span>
+              <span className="ex-track">
+                <span className="ex-band" style={{ left: `${(lo / SPECTRUM_TOP) * 100}%`, width: `${Math.max(1, ((hi - lo) / SPECTRUM_TOP) * 100)}%` }} />
+              </span>
+              <span className="dim">
+                {profile.groups} tone{profile.groups > 1 ? 's' : ''} · {Math.round((profile.symbolSeconds + profile.guardSeconds) * 1000)} ms · ~
+                {goodput(m.id)} b/s
+              </span>
+            </div>
+          );
+        })}
+        <div className="ex-mode">
+          <span />
+          <span className="ex-axis">
+            <span>0</span>
+            <span>10 kHz</span>
+            <span>20 kHz</span>
+          </span>
+          <span />
+        </div>
+      </div>
+    </figure>
+  );
+}
