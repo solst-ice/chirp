@@ -56,8 +56,8 @@ const HEADER_PARITY = 6;
 export const HEADER_BYTES = HEADER_DATA + HEADER_PARITY;
 const HEADER_NIBBLES = HEADER_BYTES * 2;
 export const CRC_BYTES = 4;
-const LEAD_IN_SECONDS = 0.02;
-const TAIL_SECONDS = 0.02;
+export const LEAD_IN_SECONDS = 0.02;
+export const TAIL_SECONDS = 0.02;
 
 // Preamble detection: mean share of energy in the expected tone, and the
 // weakest single preamble symbol, both as a fraction of the group's energy.

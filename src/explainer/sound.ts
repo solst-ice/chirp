@@ -1,60 +1,99 @@
 // Playback for the explainer's "hear it" buttons, on its own AudioContext so it
-// never touches the app's transmit path. The speaker is still shared, so the
-// app calls `stopSound()` before every transmission and the page disables
-// demos while one is running.
+// never touches the app's transmit path. The speaker and microphone are still
+// shared, so the app calls `stopSound()` before every transmission and the page
+// disables demos while the app is sending or receiving.
+//
+// Nothing here waits on `onended` alone: stopping, a suspended context and a
+// failed start all end the playback straight away, so the buttons never stick.
 
 import { useSyncExternalStore } from 'react';
-import { getModem } from '../modem/profiles';
-import { FrameType } from '../modem/types';
-import { V1, V1_FREQUENCIES } from './dsp';
+import { getModem } from '../modem/profiles.ts';
+import { FrameType } from '../modem/types.ts';
+import { V1, V1_FREQUENCIES } from './dsp.ts';
+
+type Playback = { id: string; node?: AudioBufferSourceNode; done: () => void };
+export type SoundState = { playing: string | null; error: { id: string; message: string } | null };
 
 let ctx: AudioContext | null = null;
-let current: AudioBufferSourceNode | null = null;
-let playingId: string | null = null;
+let current: Playback | null = null;
+let state: SoundState = { playing: null, error: null };
 const listeners = new Set<() => void>();
 
-function setPlaying(id: string | null) {
-  playingId = id;
+function publish(next: SoundState) {
+  state = next;
   listeners.forEach((l) => l());
 }
 
-/** Which demo is playing, if any. */
-export function usePlaying(): string | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => playingId,
-  );
+/** Which demo is playing, if any, and why the last one failed. */
+export const soundState = () => state;
+
+export function useSound(): SoundState {
+  return useSyncExternalStore((l) => {
+    listeners.add(l);
+    return () => listeners.delete(l);
+  }, soundState);
+}
+
+function end(p: Playback, error?: string) {
+  if (current !== p) return;
+  current = null;
+  if (p.node) {
+    p.node.onended = null;
+    try {
+      p.node.stop();
+    } catch {
+      // Never started, or already stopped.
+    }
+    p.node.disconnect();
+  }
+  publish({ playing: null, error: error ? { id: p.id, message: error } : null });
+  p.done();
 }
 
 function context(): AudioContext {
-  ctx ??= new (window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-  if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
+  if (!ctx) {
+    const c = new (window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    // A call, a lock screen or a background tab can suspend the context mid-demo;
+    // its source then never ends on its own.
+    c.addEventListener('statechange', () => {
+      if (c.state !== 'running' && current?.node) end(current, 'audio was interrupted');
+    });
+    ctx = c;
+  }
   return ctx;
 }
 
-function playSamples(id: string, samples: Float32Array, rate: number): Promise<void> {
+/** Resolves once the context is running. Called synchronously from the click so resume() counts as a gesture. */
+async function running(): Promise<AudioContext> {
   const c = context();
-  current?.stop();
-  const buffer = c.createBuffer(1, samples.length, rate);
-  buffer.copyToChannel(samples, 0);
-  const node = c.createBufferSource();
-  node.buffer = buffer;
-  node.connect(c.destination);
-  current = node;
-  setPlaying(id);
-  return new Promise((resolve) => {
-    node.onended = () => {
-      node.disconnect();
-      if (current === node) {
-        current = null;
-        setPlaying(null);
+  if (c.state !== 'running') await Promise.race([c.resume().catch(() => undefined), new Promise((r) => setTimeout(r, 1000))]);
+  if ((c.state as string) !== 'running') throw new Error('audio is paused · press again');
+  return c;
+}
+
+function playSamples(id: string, make: (rate: number) => Float32Array): Promise<void> {
+  if (current) end(current);
+  return new Promise((done) => {
+    const p: Playback = { id, done };
+    current = p;
+    publish({ playing: id, error: null });
+    void (async () => {
+      try {
+        const c = await running();
+        if (current !== p) return; // Stopped while resuming.
+        const samples = make(c.sampleRate);
+        const buffer = c.createBuffer(1, samples.length, c.sampleRate);
+        buffer.copyToChannel(samples, 0);
+        const node = c.createBufferSource();
+        node.buffer = buffer;
+        node.connect(c.destination);
+        node.onended = () => end(p);
+        p.node = node;
+        node.start();
+      } catch (err) {
+        end(p, err instanceof Error ? err.message : 'could not play');
       }
-      resolve();
-    };
-    node.start();
+    })();
   });
 }
 
@@ -76,30 +115,28 @@ function render(segments: { hz: number; seconds: number }[], rate: number): Floa
 }
 
 export function playTone(id: string, hz: number, seconds = 0.6) {
-  const rate = context().sampleRate;
-  return playSamples(id, render([{ hz, seconds }], rate), rate);
+  return playSamples(id, (rate) => render([{ hz, seconds }], rate));
 }
 
 /** Version 1: start marker, one pitch per character, end marker. */
 export function playV1(id: string, text: string) {
-  const rate = context().sampleRate;
   const segments = [{ hz: V1.start, seconds: V1.markerSeconds }, { hz: 0, seconds: V1.gapSeconds }];
   for (const c of text.toUpperCase()) {
     const hz = V1_FREQUENCIES.get(c);
     if (hz) segments.push({ hz, seconds: V1.toneSeconds }, { hz: 0, seconds: V1.gapSeconds });
   }
   segments.push({ hz: V1.end, seconds: V1.markerSeconds });
-  return playSamples(id, render(segments, rate), rate);
+  return playSamples(id, (rate) => render(segments, rate));
 }
 
 /** Today's FAST mode, rendered by the real modem. */
 export function playV2(id: string, text: string) {
-  const rate = context().sampleRate;
   const modem = getModem('fast');
   const frame = { type: FrameType.Text, payload: new TextEncoder().encode(text) };
-  return playSamples(id, modem.modulate(frame, rate), rate);
+  return playSamples(id, (rate) => modem.modulate(frame, rate));
 }
 
+/** Ends the current demo immediately, whatever state its audio is in. */
 export function stopSound() {
-  current?.stop();
+  if (current) end(current);
 }

@@ -264,6 +264,9 @@ function App() {
   micRef.current = mic;
   const modem = getModem(modeId);
   const txBusy = txState.kind !== 'idle';
+  // A file arrives as many frames with gaps between them; an explainer demo
+  // played into one of those gaps would land on the next chunk.
+  const rxBusy = rxState !== null || [...fileLinesRef.current.values()].some((entry) => !entry.stale);
 
   const addLine = (line: Omit<LogLine, 'id' | 'time'>) => {
     const id = nextIdRef.current++;
@@ -1131,7 +1134,7 @@ function App() {
       {explainOpen && (
         <Suspense fallback={<p className="dim">loading explanation…</p>}>
           <Explainer
-            busy={txBusy}
+            paused={txBusy ? 'sending' : rxBusy ? 'receiving' : null}
             onClose={() => {
               setExplainOpen(false);
               explainToggleRef.current?.focus();

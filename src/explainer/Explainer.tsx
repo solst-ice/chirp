@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getModem } from '../modem/profiles';
 import { V1 } from './dsp';
-import { DemoButton, EchoFigure, FecFigure, FftFigure, FilesFigure, FrameFigure, ModesFigure, NibbleFigure, SyncFigure, ToneFigure, V1Figure } from './figures';
+import { DemoButton, DemoNote, EchoFigure, FecFigure, FftFigure, FilesFigure, FrameFigure, ModesFigure, NibbleFigure, SyncFigure, ToneFigure, V1Figure } from './figures';
 import { playV1, playV2, stopSound } from './sound';
 import './Explainer.css';
 
@@ -21,7 +21,8 @@ function Fix({ title, children }: { title: string; children: React.ReactNode }) 
 }
 
 /** "How it works" article, for someone meeting data-over-sound for the first time. */
-export default function Explainer({ busy, onClose }: { busy: boolean; onClose: () => void }) {
+/** `paused` says why demos can't start (the app is sending or receiving), or is null. */
+export default function Explainer({ paused, onClose }: { paused: string | null; onClose: () => void }) {
   const [demo, setDemo] = useState('Hi ✓');
   const ref = useRef<HTMLElement>(null);
 
@@ -52,7 +53,7 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
           is a pure tone: a smooth wave repeating at one <em>frequency</em>, counted in hertz (Hz, cycles per second). More
           cycles per second sounds higher.
         </p>
-        <ToneFigure busy={busy} />
+        <ToneFigure paused={paused} />
       </section>
 
       <section>
@@ -61,7 +62,7 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
           So give every character its own pitch. The first chirp did exactly that: A was 5,700 Hz, B 5,800 Hz and so on, 100
           Hz apart. A message was a start tone, one short tone per character, then an end tone.
         </p>
-        <V1Figure busy={busy} />
+        <V1Figure paused={paused} />
       </section>
 
       <section>
@@ -197,8 +198,9 @@ export default function Explainer({ busy, onClose }: { busy: boolean; onClose: (
           </tbody>
         </table>
         <div className="ex-controls">
-          <DemoButton id="v1" label="HELLO, VERSION 1" busy={busy} play={(id) => playV1(id, 'HELLO')} />
-          <DemoButton id="v2" label="HELLO, VERSION 2" busy={busy} play={(id) => playV2(id, 'HELLO')} />
+          <DemoButton id="v1" label="HELLO, VERSION 1" paused={paused} play={(id) => playV1(id, 'HELLO')} />
+          <DemoButton id="v2" label="HELLO, VERSION 2" paused={paused} play={(id) => playV2(id, 'HELLO')} />
+          <DemoNote ids={['v1', 'v2']} paused={paused} />
         </div>
         <p className="dim">
           Version 2's HELLO is a real transmission: if this device is listening and its microphone picks it up, its own log

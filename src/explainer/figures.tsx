@@ -4,20 +4,20 @@
 // idea, and say so in their captions.
 
 import { useMemo, useRef, useState } from 'react';
-import { CRC_BYTES, HEADER_BYTES, PREAMBLE, frameBytes, frameTones } from '../modem/mfsk';
+import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, frameBytes, frameTones } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import { FrameType } from '../modem/types';
 import Canvas, { type Draw } from './Canvas';
 import { SAMPLE_RATE, V1, V1_FREQUENCIES, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
 import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
-import { playTone, playV1, stopSound, usePlaying } from './sound';
+import { playTone, playV1, stopSound, useSound } from './sound';
 
 const CELL = 8;
 const enc = new TextEncoder();
 
 /** A play button; while its sound plays it becomes STOP, and other demos wait their turn. */
-export function DemoButton({ id, label, busy, play }: { id: string; label: string; busy: boolean; play: (id: string) => Promise<void> }) {
-  const playing = usePlaying();
+export function DemoButton({ id, label, paused, play }: { id: string; label: string; paused: string | null; play: (id: string) => Promise<void> }) {
+  const { playing } = useSound();
   if (playing === id) {
     return (
       <button className="btn" onClick={stopSound}>
@@ -26,9 +26,20 @@ export function DemoButton({ id, label, busy, play }: { id: string; label: strin
     );
   }
   return (
-    <button className="btn" disabled={busy || playing !== null} onClick={() => void play(id)}>
+    <button className="btn" disabled={paused !== null || playing !== null} onClick={() => void play(id)}>
       [ ▶ {label} ]
     </button>
+  );
+}
+
+/** Beside a row of demo buttons: why they can't play right now, or why one just failed. */
+export function DemoNote({ ids, paused }: { ids: string[]; paused: string | null }) {
+  const { playing, error } = useSound();
+  const failed = error && ids.includes(error.id) ? error.message : null;
+  return (
+    <span className={failed ? 'ex-note err' : 'ex-note dim'} role="status">
+      {failed ?? (paused && playing === null ? `demos wait while this device is ${paused}` : '')}
+    </span>
   );
 }
 const hex = (b: number) => b.toString(16).padStart(2, '0');
@@ -42,7 +53,7 @@ const text = (ctx: CanvasRenderingContext2D, s: string, x: number, y: number, co
 
 /* ── 1 · a tone, sampled ─────────────────────────────── */
 
-export function ToneFigure({ busy }: { busy: boolean }) {
+export function ToneFigure({ paused }: { paused: string | null }) {
   const [position, setPosition] = useState(0.6);
   const hz = Math.round(100 * Math.pow(90, position));
 
@@ -85,7 +96,8 @@ export function ToneFigure({ busy }: { busy: boolean }) {
           <input type="range" min={0} max={1} step={0.001} value={position} onChange={(e) => setPosition(Number(e.target.value))} />
         </label>
         <span className="ex-readout">{hz.toLocaleString()} Hz</span>
-        <DemoButton id="tone" label="HEAR IT" busy={busy} play={(id) => playTone(id, hz)} />
+        <DemoButton id="tone" label="HEAR IT" paused={paused} play={(id) => playTone(id, hz)} />
+        <DemoNote ids={['tone']} paused={paused} />
       </div>
       <figcaption>
         Each dot is one sample: the microphone measures the air pressure 48,000 times a second. Slide up and the wave squeezes
@@ -113,7 +125,7 @@ function v1Timeline(word: string) {
   return { segments, total: t + V1.markerSeconds };
 }
 
-export function V1Figure({ busy }: { busy: boolean }) {
+export function V1Figure({ paused }: { paused: string | null }) {
   const { segments, total } = useMemo(() => v1Timeline(DEMO), []);
 
   const drawMap: Draw = (ctx, w, h) => {
@@ -201,7 +213,8 @@ export function V1Figure({ busy }: { busy: boolean }) {
       <Canvas height={56} label="Version 1 character map: every character at its own pitch, 100 Hz apart" draw={drawMap} />
       <Canvas height={150} label="HELLO in version 1: a start tone, one tone per letter, an end tone" draw={drawTimeline} animate />
       <div className="ex-controls">
-        <DemoButton id="v1-map" label="HEAR HELLO, VERSION 1" busy={busy} play={(id) => playV1(id, DEMO)} />
+        <DemoButton id="v1-map" label="HEAR HELLO, VERSION 1" paused={paused} play={(id) => playV1(id, DEMO)} />
+        <DemoNote ids={['v1-map']} paused={paused} />
       </div>
       <figcaption>
         Each letter is 70 ms of one pitch, then 30 ms of quiet; slowed down 3× here. The receiver ignores a letter it heard less
@@ -409,7 +422,8 @@ export function FrameFigure({ value }: { value: string }) {
     }
   };
 
-  let readout = `${payload.length} bytes of text become ${n} slots of ${slotMs} ms = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`;
+  const paddingMs = Math.round((LEAD_IN_SECONDS + TAIL_SECONDS) * 1000);
+  let readout = `${payload.length} bytes of text become ${n} slots of ${slotMs} ms, plus ${paddingMs} ms of quiet lead-in and tail = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`;
   if (current >= 0 && current < n) {
     const values = tones[current].map((bin) => Math.floor((bin >> 1) / FAST.groups));
     if (roles[current] === 'sync') readout = `slot ${current + 1} · tones ${values.join(' · ')} · a fixed pattern that marks the start`;
