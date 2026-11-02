@@ -38,7 +38,6 @@ const PROGRESS_WIDTH = 16;
 // Longest name shown in the status bar; the log row carries the full name.
 const STATUS_NAME_CHARS = 28;
 // Phones and short windows start with the spectrum collapsed so the composer is on screen.
-const ROOMY_QUERY = '(min-width: 761px) and (min-height: 600px)';
 
 // Typing STARTDEMO on one device sets off a short exchange between two.
 const DEMO_REPLIES: Record<string, string> = {
@@ -55,7 +54,7 @@ interface LogLine {
   tag: Tag;
   mode?: string;
   text: string;
-  /** Dim trailing status, e.g. "sent · delivery unconfirmed". */
+  /** Dim trailing status, e.g. "sent" or "checksum ok". */
   note?: string;
   /** 0..1 while a transfer is in flight. */
   progress?: number;
@@ -238,7 +237,7 @@ function App() {
   const [lastFile, setLastFile] = useState<{ file: File; fileId: number; modemId: string } | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px)').matches);
-  const [spectrumOpen, setSpectrumOpen] = useState(() => window.matchMedia(ROOMY_QUERY).matches);
+  const [spectrumOpen, setSpectrumOpen] = useState(true);
   const [explainOpen, setExplainOpen] = useState(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -585,7 +584,7 @@ function App() {
     switch (outcome.status) {
       case 'sent':
         setLastTx({ mode: m.label, bytes: payload.length, duration: outcome.duration });
-        updateLine(lineId, { progress: undefined, note: 'sent · delivery unconfirmed' });
+        updateLine(lineId, { progress: undefined, note: 'sent' });
         announce(`Sent: ${text}`);
         break;
       case 'cancelled':
@@ -668,7 +667,7 @@ function App() {
     switch (outcome.status) {
       case 'sent':
         setLastTx({ mode: m.label, bytes: file.size, duration: outcome.duration });
-        if (lineId !== undefined) updateLine(lineId, { progress: undefined, note: `${size} · sent · delivery unconfirmed` });
+        if (lineId !== undefined) updateLine(lineId, { progress: undefined, note: `${size} · sent` });
         announce(`Sent file ${file.name}`);
         break;
       case 'cancelled':
@@ -789,8 +788,7 @@ function App() {
     startAudio();
     addLine({
       tag: 'sys',
-      text: 'ready · every mode is received automatically',
-      note: 'sending is one-way, delivery is not confirmed',
+      text: 'ready · one-way send · auto-receive',
     });
     void startListening();
     // With a keyboard, start in the composer. Not on touch screens, where focus opens the keyboard.
@@ -930,7 +928,7 @@ function App() {
       <main className="screen">
         <Panel title="SPECTRUM" right={`mic input · 0–${maxFrequency / 1000}kHz`} className="p-spectrum">
           <details open={spectrumOpen} onToggle={(e) => setSpectrumOpen(e.currentTarget.open)}>
-            <summary className="dim">spectrum &amp; waterfall</summary>
+            <summary className="dim">{spectrumOpen ? 'hide' : 'show'}</summary>
             {/* Unmounted while collapsed, which also stops its animation loop. */}
             {spectrumOpen && (
               <Spectrum
@@ -996,7 +994,9 @@ function App() {
             })}
           </fieldset>
           <div className="mode-hint">
-            <span className="mode-hint-rate">~{goodput(modem.id)} b/s · </span>
+            <span className="mode-hint-specs">
+              ~{goodput(modem.id)} b/s · {formatBand(modem.band)} ·{' '}
+            </span>
             {modem.description}
           </div>
 

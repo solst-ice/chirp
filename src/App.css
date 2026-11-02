@@ -194,6 +194,7 @@
 .log-row {
   display: grid;
   grid-template-columns: 9ch 3ch 10ch minmax(0, 1fr);
+  padding-left: 6px;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -206,10 +207,22 @@
   color: var(--dim);
 }
 
-.tag-rx .log-tag {
+/* Received and sent rows each carry their own colour across the whole row, so
+   the two sides of a conversation are easy to tell apart at a glance. */
+.tag-rx {
+  background: color-mix(in srgb, var(--rx) 9%, transparent);
+  box-shadow: inset 2px 0 var(--rx);
+}
+.tag-tx {
+  background: color-mix(in srgb, var(--tx) 9%, transparent);
+  box-shadow: inset 2px 0 var(--tx);
+}
+.tag-rx .log-tag,
+.tag-rx .log-mode {
   color: var(--rx);
 }
-.tag-tx .log-tag {
+.tag-tx .log-tag,
+.tag-tx .log-mode {
   color: var(--tx);
 }
 .tag-err .log-tag,
@@ -326,7 +339,8 @@
   min-height: calc(var(--cell) * 2);
 }
 
-.mode-hint-rate {
+/* Rate and band, for narrow screens whose mode rows hide those columns. */
+.mode-hint-specs {
   display: none;
 }
 
@@ -624,7 +638,7 @@ details > summary:focus-visible {
     text-overflow: ellipsis;
   }
 
-  .mode-hint-rate {
+  .mode-hint-specs {
     display: inline;
   }
 }

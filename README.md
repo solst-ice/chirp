@@ -8,7 +8,7 @@ This application transmits and receives text and small files through sound: one 
 - Three modes: **FAST** (~320 bit/s), **ROBUST** (~85 bit/s, for noisy or echoey rooms) and **INAUDIBLE** (~65 bit/s, near-ultrasonic 18–19 kHz)
 - The receiver listens for all three modes at once
 - Error correction (Reed–Solomon) plus a CRC-32 checksum: text appears as it arrives, and a message only counts as received once it passes its checksum. Frames that are too damaged are reported as corrupted, but a transmission the receiver never detects (too quiet, too far, drowned out) leaves no trace
-- Transmission is one-way broadcast: the sender cannot tell whether anyone received it, so the log says "sent · delivery unconfirmed"
+- Transmission is one-way broadcast: there are no acknowledgments, so the sender cannot tell whether anyone received it. The log marks messages "sent", and its startup line reads "ready · one-way send · auto-receive"
 - Cancel any transmission (ESC), resend files to fill gaps, and a loopback TEST that checks whether a device can hear its own signal in the selected mode
 - Terminal-style interface: a live 0–20 kHz spectrum with peak hold and a scrolling waterfall, a transfer log with progress bars, per-mode link statistics, and keyboard shortcuts
 
