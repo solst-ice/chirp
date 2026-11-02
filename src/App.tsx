@@ -55,6 +55,8 @@ interface LogLine {
   /** 0..1 while a transfer is in flight. */
   progress?: number;
   file?: { name: string; url: string; size: number };
+  /** Makes "RETRY MIC" in the note a button while the microphone is not live. */
+  action?: 'retry-mic';
 }
 
 type MicState = 'off' | 'requesting' | 'live' | 'denied' | 'ended';
@@ -174,7 +176,28 @@ function Panel({
 
 const TAG_TEXT: Record<Tag, string> = { rx: 'RX', tx: 'TX', err: '!!', warn: '??', sys: '--' };
 
-function LogRow({ line }: { line: LogLine }) {
+/** The note, with "RETRY MIC" as a button when the row offers it and it would do something. */
+function LogNote({ line, retryMic }: { line: LogLine; retryMic?: () => void }) {
+  const [before, after] = line.note!.split('RETRY MIC');
+  return (
+    <span className="log-note">
+      {' · '}
+      {line.action === 'retry-mic' && retryMic && after !== undefined ? (
+        <>
+          {before}
+          <button className="log-action" onClick={retryMic}>
+            RETRY MIC
+          </button>
+          {after}
+        </>
+      ) : (
+        line.note
+      )}
+    </span>
+  );
+}
+
+function LogRow({ line, retryMic }: { line: LogLine; retryMic?: () => void }) {
   const busy = line.progress !== undefined;
   const pct = Math.round((line.progress ?? 0) * 100);
   return (
@@ -205,7 +228,7 @@ function LogRow({ line }: { line: LogLine }) {
         ) : (
           line.text
         )}
-        {line.note && <span className="log-note"> · {line.note}</span>}
+        {line.note && <LogNote line={line} retryMic={retryMic} />}
         {busy && (
           <span className="cursor" aria-hidden="true">
             █
@@ -232,7 +255,8 @@ function App() {
   const [lastRx, setLastRx] = useState<{ mode: string; marginDb: number; corrected: number } | null>(null);
   const [lastFile, setLastFile] = useState<{ file: File; fileId: number; modemId: string } | null>(null);
   const [announcement, setAnnouncement] = useState('');
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px)').matches);
+  // Open where there's room; on phones and short windows the composer below the spectrum comes first.
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px) and (min-height: 800px)').matches);
   const [spectrumOpen, setSpectrumOpen] = useState(true);
 
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -514,7 +538,7 @@ function App() {
       stream.getAudioTracks()[0]?.addEventListener('ended', () => {
         stopCapture();
         setMic('ended');
-        addLine({ tag: 'err', text: 'microphone disconnected', note: 'press RETRY MIC to listen again' });
+        addLine({ tag: 'err', text: 'microphone disconnected', note: 'press RETRY MIC to listen again', action: 'retry-mic' });
       });
       const source = ctx.createMediaStreamSource(stream);
       const node = ctx.createAnalyser();
@@ -535,7 +559,12 @@ function App() {
       console.error('Failed to start listening', err);
       stopCapture();
       setMic('denied');
-      addLine({ tag: 'err', text: `microphone unavailable: ${errorText(err)}`, note: 'you can still send · RETRY MIC to try again' });
+      addLine({
+        tag: 'err',
+        text: `microphone unavailable: ${errorText(err)}`,
+        note: 'you can still send · RETRY MIC to try again',
+        action: 'retry-mic',
+      });
     }
   };
 
@@ -684,7 +713,7 @@ function App() {
 
   const runSelfTest = async () => {
     if (micRef.current !== 'live') {
-      addLine({ tag: 'warn', text: 'loopback test needs the microphone', note: 'press RETRY MIC or LISTEN first' });
+      addLine({ tag: 'warn', text: 'loopback test needs the microphone', note: 'press RETRY MIC or LISTEN first', action: 'retry-mic' });
       return;
     }
     if (transmitter.busy) return;
@@ -887,6 +916,8 @@ function App() {
   else if (mic === 'off') state = { text: '○ NOT LISTENING', className: 'warn', actions: [{ label: 'LISTEN', run: () => void startListening() }] };
   else state = { text: '● LISTENING', className: 'ok', actions: [listenAction] };
   const firstUse = !log.some((l) => l.tag === 'rx' || l.tag === 'tx');
+  // Offered in log rows only while it would do something.
+  const retryMic = mic === 'live' || mic === 'requesting' ? undefined : () => void startListening();
 
   return (
     <div className="app" onClick={handleUserInteraction}>
@@ -931,23 +962,57 @@ function App() {
               />
             )}
           </details>
-        </Panel>
-
-        <Panel title="LOG" right={`${log.length} lines`} className="p-log">
-          <div
-            className="log"
-            ref={logRef}
-            tabIndex={0}
-            aria-label="Transfer log"
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-            }}
-          >
-            {log.map((line) => (
-              <LogRow key={line.id} line={line} />
-            ))}
-          </div>
+          <details className="diagnostics" open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
+            <summary className="dim">diagnostics</summary>
+            <div className="diag">
+              <div className="kv">
+                <span className="dim">audio</span>
+                <span>
+                  {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
+                </span>
+                <span className="dim">last tx</span>
+                <span>
+                  {lastTx
+                    ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
+                        (lastTx.bytes * 8) / lastTx.duration,
+                      )} b/s`
+                    : '—'}
+                </span>
+                <span className="dim">last rx</span>
+                <span>
+                  {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
+                </span>
+              </div>
+              <table className="stats">
+                <caption className="sr-only">Frames received per mode</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">MODE</th>
+                    <th scope="col">SYNC</th>
+                    <th scope="col">OK</th>
+                    <th scope="col">ERR</th>
+                    <th scope="col" className="col-fixed">
+                      FIXED
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MODEMS.map((m) => {
+                    const s = stats[m.id];
+                    return (
+                      <tr key={m.id}>
+                        <th scope="row">{m.label}</th>
+                        <td>{s?.syncs ?? 0}</td>
+                        <td className="ok">{s?.frames ?? 0}</td>
+                        <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
+                        <td className="col-fixed">{s?.corrected ?? 0}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </Panel>
 
         <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
@@ -1064,56 +1129,21 @@ function App() {
           </div>
         </Panel>
 
-        <Panel title="LINK" className="p-link">
-          <details open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
-            <summary className="dim">diagnostics</summary>
-            <div className="kv">
-              <span className="dim">audio</span>
-              <span>
-                {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
-              </span>
-              <span className="dim">last tx</span>
-              <span>
-                {lastTx
-                  ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
-                      (lastTx.bytes * 8) / lastTx.duration,
-                    )} b/s`
-                  : '—'}
-              </span>
-              <span className="dim">last rx</span>
-              <span>
-                {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
-              </span>
-            </div>
-            <table className="stats">
-              <caption className="sr-only">Frames received per mode</caption>
-              <thead>
-                <tr>
-                  <th scope="col">MODE</th>
-                  <th scope="col">SYNC</th>
-                  <th scope="col">OK</th>
-                  <th scope="col">ERR</th>
-                  <th scope="col" className="col-fixed">
-                    FIXED
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {MODEMS.map((m) => {
-                  const s = stats[m.id];
-                  return (
-                    <tr key={m.id}>
-                      <th scope="row">{m.label}</th>
-                      <td>{s?.syncs ?? 0}</td>
-                      <td className="ok">{s?.frames ?? 0}</td>
-                      <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
-                      <td className="col-fixed">{s?.corrected ?? 0}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </details>
+        <Panel title="LOG" right={`${log.length} lines`} className="p-log">
+          <div
+            className="log"
+            ref={logRef}
+            tabIndex={0}
+            aria-label="Transfer log"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+          >
+            {log.map((line) => (
+              <LogRow key={line.id} line={line} retryMic={retryMic} />
+            ))}
+          </div>
         </Panel>
       </main>
 

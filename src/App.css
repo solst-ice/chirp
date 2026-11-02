@@ -70,16 +70,15 @@
 
 /* ── panels: single-line boxes with the title set into the top border ── */
 
-/* Wide screens: a 2×2 grid, what you receive on the left and what you send on
-   the right, so the composer is at the top of the page rather than below the
-   spectrum. Boxes in a row share a height and both columns share a width, so
-   every edge lines up; the bottom row takes whatever height the window has left. */
+/* Wide screens: the spectrum (with the link diagnostics) across the top, then
+   transmit and log side by side in equal columns, sharing a height. The bottom
+   row takes whatever height the window has left. */
 .screen {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: auto 1fr;
-  grid-template-areas: 'spec tx' 'log link';
+  grid-template-areas: 'spec spec' 'tx log';
   gap: calc(var(--cell) * 1.5) 2ch;
   padding-top: 8px;
 }
@@ -92,9 +91,6 @@
 }
 .p-tx {
   grid-area: tx;
-}
-.p-link {
-  grid-area: link;
 }
 
 .panel {
@@ -240,6 +236,22 @@
 
 .log-note {
   color: var(--dim);
+}
+
+/* "RETRY MIC" inside a log note: a real button, styled as an inline link. */
+.log-action {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.log-action:focus-visible {
+  outline: 1px dashed var(--accent);
 }
 
 .busy .log-tag {
@@ -461,10 +473,28 @@ details > summary:focus-visible {
   outline: 1px dashed var(--accent);
 }
 
+/* Link diagnostics, under the spectrum: readings beside the per-mode table
+   when there is room, stacked when not. */
+.diagnostics {
+  margin-top: 8px;
+}
+
+.diag {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--cell) 4ch;
+}
+
+@media (max-width: 900px) {
+  .diag {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .kv {
   display: grid;
   grid-template-columns: 9ch minmax(0, 1fr);
-  margin-bottom: var(--cell);
+  align-content: start;
 }
 
 .kv > span {
@@ -546,7 +576,7 @@ details > summary:focus-visible {
     flex: none;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: none;
-    grid-template-areas: 'spec' 'tx' 'log' 'link';
+    grid-template-areas: 'spec' 'tx' 'log';
   }
 
   /* Status and CANCEL / START AUDIO stay reachable while scrolling. */

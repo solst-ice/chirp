@@ -80,7 +80,9 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       ctx.font = FONT;
       cw = Math.max(6, Math.round(ctx.measureText('█').width)) || 8;
       cols = Math.max(GUTTER + 20, Math.floor(wrap.clientWidth / cw));
-      const compact = cols < 70 || window.innerHeight < 760;
+      // Shorter on narrow screens, and on any window under 960 px tall: the
+      // composer sits below the spectrum and must stay on a laptop's first screen.
+      const compact = cols < 70 || window.innerHeight < 960;
       specRows = compact ? 7 : 10;
       waterRows = compact ? 5 : 8;
       plot = cols - GUTTER;
