@@ -194,3 +194,50 @@ test('no modem syncs on 20 s of noise', () => {
     assert.equal(events.filter((e) => e.kind === 'sync').length, 0, modem.id);
   }
 });
+
+test('decoder output is pinned', () => {
+  // Captured before measure() learned to skip the other tone set, which must not
+  // change anything the decoder reports. Margins and corrected-byte counts move
+  // with any change to timing or tone energies, so an intended decoder change
+  // fails here too; update these values deliberately.
+  const pinned: Record<string, string[][]> = {
+    fast: [
+      ['sync', 'header', 'frame 6 fixed 11.580 dB'],
+      ['sync', 'header', 'frame 7 fixed 10.865 dB'],
+      ['sync', 'header', 'frame 10 fixed 9.414 dB'],
+      ['sync', 'header', 'error too many errors to correct'],
+    ],
+    robust: [
+      ['sync', 'header', 'frame 0 fixed 23.037 dB'],
+      ['sync', 'header', 'frame 0 fixed 20.559 dB'],
+      ['sync', 'header', 'frame 2 fixed 17.335 dB'],
+    ],
+    inaudible: [
+      ['sync', 'header', 'frame 11 fixed 12.439 dB'],
+      ['sync', 'header', 'frame 10 fixed 12.328 dB'],
+      ['sync', 'header', 'frame 10 fixed 12.029 dB'],
+    ],
+  };
+  for (const modem of MODEMS) {
+    const snrs = modem.id === 'fast' ? [6, 2, -2, -5] : [6, 2, -2];
+    const actual = snrs.map((snrDb) => {
+      const { events } = roundTrip(modem, { type: FrameType.FileChunk, payload: randomBytes(120, 7) }, 48000, {
+        rxRate: 44100,
+        snrDb,
+        echoes: room(3, 0.4),
+        clockPpm: 150,
+        seed: 11,
+      });
+      return events
+        .filter((e) => e.kind !== 'progress')
+        .map((e) =>
+          e.kind === 'frame'
+            ? `frame ${e.stats.correctedBytes} fixed ${e.stats.marginDb.toFixed(3)} dB`
+            : e.kind === 'error'
+              ? `error ${e.reason}`
+              : e.kind,
+        );
+    });
+    assert.deepEqual(actual, pinned[modem.id], modem.id);
+  }
+});

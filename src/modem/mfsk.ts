@@ -114,7 +114,11 @@ export function frameBytes(p: MfskProfile, frame: Frame): Uint8Array {
 const toneFrequency = (p: MfskProfile, bin: number) => p.baseFrequency + bin * p.toneSpacing;
 const toneSets = (p: MfskProfile) => (p.alternate ? 2 : 1);
 const binCount = (p: MfskProfile) => p.groups * TONES * toneSets(p);
-/** `symbol` is the absolute symbol index (preamble included); it selects the tone set. */
+/**
+ * `symbol` is the absolute symbol index (preamble included); it selects the tone set.
+ * The demodulator's partial `measure(start, symbol)` computes exactly the bins this
+ * can return for that symbol, so it must stay the only way a symbol's bins are chosen.
+ */
 const binOf = (p: MfskProfile, value: number, group: number, symbol: number) =>
   (value * p.groups + group) * toneSets(p) + (symbol % toneSets(p));
 const symbolPeriod = (p: MfskProfile) => p.symbolSeconds + p.guardSeconds;
@@ -306,23 +310,55 @@ class MfskDemodulator implements Demodulator {
     this.nextHop = Math.max(at, this.written - RING_SIZE / 2);
   }
 
-  /** Energy at every tone for the window starting at absolute sample `start`. */
-  private measure(start: number): Float32Array {
+  /**
+   * Energy at the tones of the window starting at absolute sample `start`.
+   *
+   * Without `symbol`, every tone of every tone set is measured; the preamble
+   * search needs that, since it doesn't yet know which symbol it is looking at.
+   * With `symbol`, only the tones `binOf(p, v, g, symbol)` can name are
+   * measured, which halves the cost with alternating tone sets. That is most of
+   * the work at sync (refine) and during reception.
+   *
+   * Risk for future changes: after a call with `symbol`, the other tone set's
+   * entries still hold values from an earlier window. They are stale, not zero,
+   * so reading them gives plausible wrong numbers rather than an error. Callers
+   * passing `symbol` must read bins only through `binOf` with that same symbol;
+   * anything that needs both sets (echo estimates, diagnostics, a search across
+   * symbol boundaries) must call without it. The array is also shared and
+   * overwritten by the next call, so copy what must outlive it.
+   * "decoder output is pinned" in test/modem.test.ts fails if this changes what
+   * the decoder reports.
+   */
+  private measure(start: number, symbol?: number): Float32Array {
     const mask = RING_SIZE - 1;
     const f = this.frame;
     for (let n = 0; n < this.window; n++) f[n] = this.ring[(start + n) & mask];
-    for (let b = 0; b < this.bins; b++) {
-      const c = this.cos[b];
-      const s = this.sin[b];
-      let re = 0;
-      let im = 0;
-      for (let n = 0; n < this.window; n++) {
-        re += f[n] * c[n];
-        im += f[n] * s[n];
+    if (symbol === undefined) {
+      for (let b = 0; b < this.bins; b++) this.energy[b] = this.windowEnergy(b);
+    } else {
+      const { p } = this;
+      for (let g = 0; g < p.groups; g++) {
+        for (let v = 0; v < TONES; v++) {
+          const b = binOf(p, v, g, symbol);
+          this.energy[b] = this.windowEnergy(b);
+        }
       }
-      this.energy[b] = re * re + im * im;
     }
     return this.energy;
+  }
+
+  /** Energy at one tone over the window `measure` copied into `this.frame`. */
+  private windowEnergy(bin: number): number {
+    const f = this.frame;
+    const c = this.cos[bin];
+    const s = this.sin[bin];
+    let re = 0;
+    let im = 0;
+    for (let n = 0; n < this.window; n++) {
+      re += f[n] * c[n];
+      im += f[n] * s[n];
+    }
+    return re * re + im * im;
   }
 
   private binEnergy(bin: number, start: number): number {
@@ -392,7 +428,8 @@ class MfskDemodulator implements Demodulator {
       let hit = 0;
       let all = 1e-20;
       for (let s = 0; s < PREAMBLE.length; s++) {
-        const e = this.measure(Math.round(coarse + off + s * this.period));
+        // Only symbol s's tone set is measured; both sums below read through binOf(…, s).
+        const e = this.measure(Math.round(coarse + off + s * this.period), s);
         for (let g = 0; g < p.groups; g++) {
           hit += e[binOf(p, preambleValue(s, g), g, s)];
           for (let v = 0; v < TONES; v++) all += e[binOf(p, v, g, s)];
@@ -411,8 +448,9 @@ class MfskDemodulator implements Demodulator {
     const start = Math.round(lock.base + (PREAMBLE.length + lock.symbol) * this.period + lock.adjust);
     if (start + this.window + this.trackOffset > this.written) return false;
 
-    const e = this.measure(start);
     const symbol = PREAMBLE.length + lock.symbol;
+    // Only this symbol's tone set is measured: read `e` through binOf(…, symbol) alone.
+    const e = this.measure(start, symbol);
     const chosen: number[] = [];
     for (let g = 0; g < p.groups; g++) {
       let best = -1;
