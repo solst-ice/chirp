@@ -928,207 +928,203 @@ function App() {
       </div>
 
       <main className="screen">
-        <div className="col col-main">
-          <Panel title="SPECTRUM" right={`mic input · 0–${maxFrequency / 1000}kHz`} className="p-spectrum">
-            <details open={spectrumOpen} onToggle={(e) => setSpectrumOpen(e.currentTarget.open)}>
-              <summary className="dim">spectrum &amp; waterfall</summary>
-              {/* Unmounted while collapsed, which also stops its animation loop. */}
-              {spectrumOpen && (
-                <Spectrum
-                  analyser={analyser}
-                  sampleRate={sampleRate}
-                  maxFrequency={maxFrequency}
-                  band={modem.band}
-                  bandLabel={`TX:${modem.label}`}
-                  transmitting={txState.kind === 'sending'}
-                />
-              )}
-            </details>
-          </Panel>
-
-          <Panel title="LOG" right={`${log.length} lines`} className="p-log">
-            <div
-              className="log"
-              ref={logRef}
-              tabIndex={0}
-              aria-label="Transfer log"
-              onScroll={(e) => {
-                const el = e.currentTarget;
-                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-              }}
-            >
-              {log.map((line) => (
-                <LogRow key={line.id} line={line} />
-              ))}
-            </div>
-          </Panel>
-        </div>
-
-        <div className="col col-side">
-          <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
-            <fieldset className="modes" disabled={txBusy}>
-              <legend className="field-label">MODE</legend>
-              {MODEMS.map((m, i) => {
-                const supported = m.supports(sampleRate);
-                const active = m.id === modeId;
-                return (
-                  <label
-                    key={m.id}
-                    className={`mode-row${active ? ' active' : ''}${supported ? '' : ' disabled'}`}
-                    title={supported ? m.description : `needs a higher sample rate than ${sampleRate} Hz`}
-                  >
-                    <input
-                      type="radio"
-                      name="mode"
-                      value={m.id}
-                      checked={active}
-                      disabled={!supported}
-                      onChange={() => selectMode(m.id)}
-                    />
-                    <span className="mode-radio" aria-hidden="true">
-                      {active ? '(•)' : '( )'}
-                    </span>
-                    <span className="mode-name">{m.label}</span>
-                    <span className="mode-band">{formatBand(m.band)}</span>
-                    <span className="mode-rate">~{goodput(m.id)} b/s</span>
-                    <span className="mode-key" aria-hidden="true">
-                      {i + 1}
-                    </span>
-                  </label>
-                );
-              })}
-            </fieldset>
-            <div className="mode-hint">
-              <span className="mode-hint-rate">~{goodput(modem.id)} b/s · </span>
-              {modem.description}
-            </div>
-
-            <label className="field-label" htmlFor="composer">
-              MESSAGE
-            </label>
-            <div className="prompt">
-              <span className="prompt-sign" aria-hidden="true">
-                &gt;
-              </span>
-              <textarea
-                id="composer"
-                ref={inputRef}
-                value={inputText}
-                rows={3}
-                spellCheck={false}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => {
-                  // Enter that confirms an IME composition must not send.
-                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (inputText.trim() && !overLimit) void sendText(inputText, true);
-                  } else if (e.key === 'Escape' && !transmitter.busy) {
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="type a message…"
+        <Panel title="SPECTRUM" right={`mic input · 0–${maxFrequency / 1000}kHz`} className="p-spectrum">
+          <details open={spectrumOpen} onToggle={(e) => setSpectrumOpen(e.currentTarget.open)}>
+            <summary className="dim">spectrum &amp; waterfall</summary>
+            {/* Unmounted while collapsed, which also stops its animation loop. */}
+            {spectrumOpen && (
+              <Spectrum
+                analyser={analyser}
+                sampleRate={sampleRate}
+                maxFrequency={maxFrequency}
+                band={modem.band}
+                bandLabel={`TX:${modem.label}`}
+                transmitting={txState.kind === 'sending'}
               />
-            </div>
-            {firstUse && (
-              <div className="tx-hint">open chirp on a second device and allow its microphone, then send</div>
             )}
-            <div className={`tx-meta${overLimit ? ' err' : ''}`}>
-              {payloadBytes}/{modem.maxPayload} B
-              {payloadBytes > 0 && ` · ~${formatSeconds(modem.airtime(payloadBytes))} airtime`}
-            </div>
+          </details>
+        </Panel>
 
-            <div className="actions">
-              {txBusy ? (
-                <button className="btn btn-primary" onClick={() => transmitter.cancel()}>
-                  [ <span className="key-hint">ESC </span>CANCEL ]
-                </button>
-              ) : (
-                <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit}>
-                  [ ⏎ SEND ]
-                </button>
-              )}
-              <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy}>
-                [ <span className="key">F</span>ILE ]
-              </button>
-              {lastFile && (
-                <button className="btn" onClick={resendLastFile} disabled={txBusy} title={`Resend ${lastFile.file.name}`}>
-                  [ <span className="key">R</span>ESEND {lastFile.file.name} ]
-                </button>
-              )}
-              <button
-                className="btn"
-                onClick={() => void runSelfTest()}
-                disabled={txBusy || mic !== 'live'}
-                title="Play a test frame and check that this device can hear it"
-              >
-                [ <span className="key">T</span>EST ]
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) void sendFile(file);
-                }}
-              />
-            </div>
-          </Panel>
+        <Panel title="LOG" right={`${log.length} lines`} className="p-log">
+          <div
+            className="log"
+            ref={logRef}
+            tabIndex={0}
+            aria-label="Transfer log"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+          >
+            {log.map((line) => (
+              <LogRow key={line.id} line={line} />
+            ))}
+          </div>
+        </Panel>
 
-          <Panel title="LINK" className="p-link">
-            <details open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
-              <summary className="dim">diagnostics</summary>
-              <div className="kv">
-                <span className="dim">audio</span>
-                <span>
-                  {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
-                </span>
-                <span className="dim">last tx</span>
-                <span>
-                  {lastTx
-                    ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
-                        (lastTx.bytes * 8) / lastTx.duration,
-                      )} b/s`
-                    : '—'}
-                </span>
-                <span className="dim">last rx</span>
-                <span>
-                  {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
-                </span>
-              </div>
-              <table className="stats">
-                <caption className="sr-only">Frames received per mode</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">MODE</th>
-                    <th scope="col">SYNC</th>
-                    <th scope="col">OK</th>
-                    <th scope="col">ERR</th>
-                    <th scope="col" className="col-fixed">
-                      FIXED
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {MODEMS.map((m) => {
-                    const s = stats[m.id];
-                    return (
-                      <tr key={m.id}>
-                        <th scope="row">{m.label}</th>
-                        <td>{s?.syncs ?? 0}</td>
-                        <td className="ok">{s?.frames ?? 0}</td>
-                        <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
-                        <td className="col-fixed">{s?.corrected ?? 0}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </details>
-          </Panel>
-        </div>
+        <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
+          <fieldset className="modes" disabled={txBusy}>
+            <legend className="field-label">MODE</legend>
+            {MODEMS.map((m, i) => {
+              const supported = m.supports(sampleRate);
+              const active = m.id === modeId;
+              return (
+                <label
+                  key={m.id}
+                  className={`mode-row${active ? ' active' : ''}${supported ? '' : ' disabled'}`}
+                  title={supported ? m.description : `needs a higher sample rate than ${sampleRate} Hz`}
+                >
+                  <input
+                    type="radio"
+                    name="mode"
+                    value={m.id}
+                    checked={active}
+                    disabled={!supported}
+                    onChange={() => selectMode(m.id)}
+                  />
+                  <span className="mode-radio" aria-hidden="true">
+                    {active ? '(•)' : '( )'}
+                  </span>
+                  <span className="mode-name">{m.label}</span>
+                  <span className="mode-band">{formatBand(m.band)}</span>
+                  <span className="mode-rate">~{goodput(m.id)} b/s</span>
+                  <span className="mode-key" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+          <div className="mode-hint">
+            <span className="mode-hint-rate">~{goodput(modem.id)} b/s · </span>
+            {modem.description}
+          </div>
+
+          <label className="field-label" htmlFor="composer">
+            MESSAGE
+          </label>
+          <div className="prompt">
+            <span className="prompt-sign" aria-hidden="true">
+              &gt;
+            </span>
+            <textarea
+              id="composer"
+              ref={inputRef}
+              value={inputText}
+              rows={3}
+              spellCheck={false}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter that confirms an IME composition must not send.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (inputText.trim() && !overLimit) void sendText(inputText, true);
+                } else if (e.key === 'Escape' && !transmitter.busy) {
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="type a message…"
+            />
+          </div>
+          {firstUse && (
+            <div className="tx-hint">open chirp on a second device and allow its microphone, then send</div>
+          )}
+          <div className={`tx-meta${overLimit ? ' err' : ''}`}>
+            {payloadBytes}/{modem.maxPayload} B
+            {payloadBytes > 0 && ` · ~${formatSeconds(modem.airtime(payloadBytes))} airtime`}
+          </div>
+
+          <div className="actions">
+            {txBusy ? (
+              <button className="btn btn-primary" onClick={() => transmitter.cancel()}>
+                [ <span className="key-hint">ESC </span>CANCEL ]
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit}>
+                [ ⏎ SEND ]
+              </button>
+            )}
+            <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy}>
+              [ <span className="key">F</span>ILE ]
+            </button>
+            {lastFile && (
+              <button className="btn" onClick={resendLastFile} disabled={txBusy} title={`Resend ${lastFile.file.name}`}>
+                [ <span className="key">R</span>ESEND {lastFile.file.name} ]
+              </button>
+            )}
+            <button
+              className="btn"
+              onClick={() => void runSelfTest()}
+              disabled={txBusy || mic !== 'live'}
+              title="Play a test frame and check that this device can hear it"
+            >
+              [ <span className="key">T</span>EST ]
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) void sendFile(file);
+              }}
+            />
+          </div>
+        </Panel>
+
+        <Panel title="LINK" className="p-link">
+          <details open={diagnosticsOpen} onToggle={(e) => setDiagnosticsOpen(e.currentTarget.open)}>
+            <summary className="dim">diagnostics</summary>
+            <div className="kv">
+              <span className="dim">audio</span>
+              <span>
+                {sampleRate} Hz · {captureMethod} · {audioState} · mic {mic}
+              </span>
+              <span className="dim">last tx</span>
+              <span>
+                {lastTx
+                  ? `${lastTx.mode} · ${lastTx.bytes} B · ${lastTx.duration.toFixed(2)}s · ${Math.round(
+                      (lastTx.bytes * 8) / lastTx.duration,
+                    )} b/s`
+                  : '—'}
+              </span>
+              <span className="dim">last rx</span>
+              <span>
+                {lastRx ? `${lastRx.mode} · margin ${lastRx.marginDb.toFixed(1)} dB · ${lastRx.corrected} B fixed` : '—'}
+              </span>
+            </div>
+            <table className="stats">
+              <caption className="sr-only">Frames received per mode</caption>
+              <thead>
+                <tr>
+                  <th scope="col">MODE</th>
+                  <th scope="col">SYNC</th>
+                  <th scope="col">OK</th>
+                  <th scope="col">ERR</th>
+                  <th scope="col" className="col-fixed">
+                    FIXED
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {MODEMS.map((m) => {
+                  const s = stats[m.id];
+                  return (
+                    <tr key={m.id}>
+                      <th scope="row">{m.label}</th>
+                      <td>{s?.syncs ?? 0}</td>
+                      <td className="ok">{s?.frames ?? 0}</td>
+                      <td className={s?.errors ? 'err' : undefined}>{s?.errors ?? 0}</td>
+                      <td className="col-fixed">{s?.corrected ?? 0}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </details>
+        </Panel>
       </main>
 
       {explainOpen && (

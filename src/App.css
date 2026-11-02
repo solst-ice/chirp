@@ -70,20 +70,18 @@
 
 /* ── panels: single-line boxes with the title set into the top border ── */
 
+/* Wide screens: a 2×2 grid, what you receive on the left and what you send on
+   the right, so the composer is at the top of the page rather than below the
+   spectrum. Boxes in a row share a height and both columns share a width, so
+   every edge lines up; the bottom row takes whatever height the window has left. */
 .screen {
+  flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr;
+  grid-template-areas: 'spec tx' 'log link';
   gap: calc(var(--cell) * 1.5) 2ch;
   padding-top: 8px;
-}
-
-/* Wide screens: what you receive on the left, what you send on the right, so
-   the composer is at the top of the page rather than below the spectrum. */
-.col {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--cell) * 1.5);
-  min-width: 0;
 }
 
 .p-spectrum {
@@ -182,11 +180,10 @@
 
 .p-log {
   display: flex;
-  flex: 1;
   flex-direction: column;
 }
 
-/* Fills whatever height the transmit + link column leaves below the spectrum. */
+/* Fills the bottom row of the grid, however tall LINK or the window makes it. */
 .log {
   flex: 1 1 0;
   min-height: calc(var(--cell) * 16);
@@ -531,12 +528,10 @@ details > summary:focus-visible {
 
 @media (max-width: 900px) {
   .screen {
+    flex: none;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
     grid-template-areas: 'spec' 'tx' 'log' 'link';
-  }
-
-  .col {
-    display: contents;
   }
 
   /* Status and CANCEL / START AUDIO stay reachable while scrolling. */
