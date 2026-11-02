@@ -8,7 +8,7 @@ import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, frame
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import { FrameType } from '../modem/types';
 import Canvas, { type Draw } from './Canvas';
-import { SAMPLE_RATE, V1, V1_FREQUENCIES, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
+import { SAMPLE_RATE, V1, V1_FREQUENCIES, V1_RANGE, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
 import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
 import { playTone, playV1, stopSound, useSound } from './sound';
 
@@ -16,7 +16,7 @@ const CELL = 8;
 const enc = new TextEncoder();
 
 /** A play button; while its sound plays it becomes STOP, and other demos wait their turn. */
-export function DemoButton({ id, label, paused, play }: { id: string; label: string; paused: string | null; play: (id: string) => Promise<void> }) {
+export function DemoButton({ id, label, play }: { id: string; label: string; play: (id: string) => Promise<void> }) {
   const { playing } = useSound();
   if (playing === id) {
     return (
@@ -26,23 +26,43 @@ export function DemoButton({ id, label, paused, play }: { id: string; label: str
     );
   }
   return (
-    <button className="btn" disabled={paused !== null || playing !== null} onClick={() => void play(id)}>
+    <button className="btn" disabled={playing !== null} onClick={() => void play(id)}>
       [ ▶ {label} ]
     </button>
   );
 }
 
-/** Beside a row of demo buttons: why they can't play right now, or why one just failed. */
-export function DemoNote({ ids, paused }: { ids: string[]; paused: string | null }) {
-  const { playing, error } = useSound();
-  const failed = error && ids.includes(error.id) ? error.message : null;
+/** Beside a row of demo buttons: why one of them just failed to play. */
+export function DemoNote({ ids }: { ids: string[] }) {
+  const { error } = useSound();
   return (
-    <span className={failed ? 'ex-note err' : 'ex-note dim'} role="status">
-      {failed ?? (paused && playing === null ? `demos wait while this device is ${paused}` : '')}
+    <span className="ex-note err" role="status">
+      {error && ids.includes(error.id) ? error.message : ''}
     </span>
   );
 }
 const hex = (b: number) => b.toString(16).padStart(2, '0');
+const hz = (f: number) => Math.round(f).toLocaleString('en-US');
+
+/**
+ * One of several texts, laid out in the space of the tallest. A figure that
+ * steps through captions of different lengths keeps its height, so the page
+ * below it doesn't move. Screen readers get only the current text.
+ */
+function SteadyText({ texts, index, className = '', live = false }: { texts: string[]; index: number; className?: string; live?: boolean }) {
+  return (
+    <p className={`ex-steady ${className}`}>
+      {texts.map((t, i) => (
+        <span key={i} aria-hidden="true" className={i === index ? undefined : 'ex-steady-off'}>
+          {t}
+        </span>
+      ))}
+      <span className="sr-only" aria-live={live ? 'polite' : 'off'}>
+        {texts[index]}
+      </span>
+    </p>
+  );
+}
 
 const text = (ctx: CanvasRenderingContext2D, s: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') => {
   ctx.fillStyle = color;
@@ -53,7 +73,7 @@ const text = (ctx: CanvasRenderingContext2D, s: string, x: number, y: number, co
 
 /* ── 1 · a tone, sampled ─────────────────────────────── */
 
-export function ToneFigure({ paused }: { paused: string | null }) {
+export function ToneFigure() {
   const [position, setPosition] = useState(0.6);
   const hz = Math.round(100 * Math.pow(90, position));
 
@@ -96,8 +116,8 @@ export function ToneFigure({ paused }: { paused: string | null }) {
           <input type="range" min={0} max={1} step={0.001} value={position} onChange={(e) => setPosition(Number(e.target.value))} />
         </label>
         <span className="ex-readout">{hz.toLocaleString()} Hz</span>
-        <DemoButton id="tone" label="HEAR IT" paused={paused} play={(id) => playTone(id, hz)} />
-        <DemoNote ids={['tone']} paused={paused} />
+        <DemoButton id="tone" label="HEAR IT" play={(id) => playTone(id, hz)} />
+        <DemoNote ids={['tone']} />
       </div>
       <figcaption>
         Each dot is one sample: the microphone measures the air pressure 48,000 times a second. Slide up and the wave squeezes
@@ -114,18 +134,19 @@ const MAP_MAX_HZ = 9000;
 
 function v1Timeline(word: string) {
   const segments: { label: string; hz: number; t0: number; dur: number; marker?: boolean }[] = [];
-  let t = 0;
+  let t = V1.leadSeconds;
   segments.push({ label: 'start', hz: V1.start, t0: t, dur: V1.markerSeconds, marker: true });
   t += V1.markerSeconds + V1.gapSeconds;
   for (const c of word) {
     segments.push({ label: c, hz: V1_FREQUENCIES.get(c)!, t0: t, dur: V1.toneSeconds });
     t += V1.toneSeconds + V1.gapSeconds;
   }
+  t += V1.endPauseSeconds;
   segments.push({ label: 'end', hz: V1.end, t0: t, dur: V1.markerSeconds, marker: true });
   return { segments, total: t + V1.markerSeconds };
 }
 
-export function V1Figure({ paused }: { paused: string | null }) {
+export function V1Figure() {
   const { segments, total } = useMemo(() => v1Timeline(DEMO), []);
 
   const drawMap: Draw = (ctx, w, h) => {
@@ -213,13 +234,64 @@ export function V1Figure({ paused }: { paused: string | null }) {
       <Canvas height={56} label="Version 1 character map: every character at its own pitch, 100 Hz apart" draw={drawMap} />
       <Canvas height={150} label="HELLO in version 1: a start tone, one tone per letter, an end tone" draw={drawTimeline} animate />
       <div className="ex-controls">
-        <DemoButton id="v1-map" label="HEAR HELLO, VERSION 1" paused={paused} play={(id) => playV1(id, DEMO)} />
-        <DemoNote ids={['v1-map']} paused={paused} />
+        <DemoButton id="v1-map" label="HEAR HELLO, VERSION 1" play={(id) => playV1(id, DEMO)} />
+        <DemoNote ids={['v1-map']} />
       </div>
       <figcaption>
-        Each letter is 70 ms of one pitch, then 30 ms of quiet; slowed down 3× here. The receiver ignores a letter it heard less
+        Each letter is 70 ms of its pitch, then 30 ms of quiet; slowed down 3× here. The receiver ignores a letter it heard less
         than {V1.lockoutMs} ms ago, so one long tone isn't counted twice. The second L often fell inside that window and
         vanished.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 2b · version 1's character map, as a table ──────── */
+
+const pitch = (c: string) => V1_FREQUENCIES.get(c)!;
+const V1_TABLES: { caption: string; rows: [string, number][] }[] = [
+  { caption: 'letters', rows: [...'ABCD'].map((c) => [c, pitch(c)]) },
+  { caption: 'digits', rows: [...'1234'].map((c) => [c, pitch(c)]) },
+  { caption: 'symbols', rows: [...'!@#$'].map((c) => [c, pitch(c)]) },
+  {
+    caption: 'markers',
+    rows: [
+      ['start', V1.start],
+      ['end', V1.end],
+    ],
+  },
+];
+
+export function V1TableFigure() {
+  return (
+    <figure className="ex-figure">
+      <div className="ex-v1map">
+        {V1_TABLES.map((t) => (
+          <table key={t.caption}>
+            <caption>{t.caption}</caption>
+            <thead className="sr-only">
+              <tr>
+                <th scope="col">character</th>
+                <th scope="col">pitch</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.rows.map(([label, f]) => (
+                <tr key={label}>
+                  <th scope="row" className={label.length > 1 ? 'dim' : undefined}>
+                    {label}
+                  </th>
+                  <td>{hz(f)} Hz</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+      </div>
+      <figcaption>
+        A few of version 1's {V1_FREQUENCIES.size} characters, which spanned {hz(V1_RANGE[0])} to {hz(V1_RANGE[1])} Hz. Neighbours
+        are 100 Hz apart, and the markers have pitches no character uses. The receiver read the table backwards: hear{' '}
+        {hz(pitch('C'))} Hz, print C.
       </figcaption>
     </figure>
   );
@@ -423,22 +495,23 @@ export function FrameFigure({ value }: { value: string }) {
   };
 
   const paddingMs = Math.round((LEAD_IN_SECONDS + TAIL_SECONDS) * 1000);
-  let readout = `${payload.length} bytes of text become ${n} slots of ${slotMs} ms, plus ${paddingMs} ms of quiet lead-in and tail = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`;
-  if (current >= 0 && current < n) {
-    const values = tones[current].map((bin) => Math.floor((bin >> 1) / FAST.groups));
-    if (roles[current] === 'sync') readout = `slot ${current + 1} · tones ${values.join(' · ')} · a fixed pattern that marks the start`;
-    else {
-      const first = (current - PREAMBLE_SLOTS) * bytesPerSlot;
+  // The summary, then one line per slot; all of them reserve space (see SteadyText).
+  const readouts = [
+    `${payload.length} bytes of text become ${n} slots of ${slotMs} ms, plus ${paddingMs} ms of quiet lead-in and tail = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`,
+    ...tones.map((slot, s) => {
+      const values = slot.map((bin) => Math.floor((bin >> 1) / FAST.groups));
+      if (roles[s] === 'sync') return `slot ${s + 1} · tones ${values.join(' · ')} · a fixed pattern that marks the start`;
+      const first = (s - PREAMBLE_SLOTS) * bytesPerSlot;
       const slice = Array.from(bytes.subarray(first, first + bytesPerSlot));
-      const asText = roles[current] === 'message' ? quoted(slice.filter((_, i) => first + i < HEADER_BYTES + payload.length)) : '';
-      readout = `slot ${current + 1} · tones ${values.join(' · ')} → bytes ${slice.map(hex).join(' ')} · ${LABELS[roles[current]] || 'padding'}${asText}`;
-    }
-  }
+      const asText = roles[s] === 'message' ? quoted(slice.filter((_, i) => first + i < HEADER_BYTES + payload.length)) : '';
+      return `slot ${s + 1} · tones ${values.join(' · ')} → bytes ${slice.map(hex).join(' ')} · ${LABELS[roles[s]] || 'padding'}${asText}`;
+    }),
+  ];
 
   return (
     <figure className="ex-figure" ref={ref}>
       <Canvas height={230} label={`Your text as FAST sends it: ${n} slots of four tones each`} draw={draw} redraw={`${current}|${value}`} />
-      <p className="ex-verdict dim">{readout}</p>
+      <SteadyText className="ex-verdict dim" texts={readouts} index={current >= 0 && current < n ? current + 1 : 0} />
       <figcaption>
         Your text above, exactly as FAST sends it, slowed down 10×. Time runs left to right, pitch bottom to top. Every column is
         one slot with four tones.
@@ -616,9 +689,12 @@ export function FecFigure() {
           );
         })}
       </button>
-      <p className="ex-verdict" aria-live={manual === null ? 'off' : 'polite'}>
-        {step + 1}/{FEC_STEPS.length} · {FEC_STEPS[step]}
-      </p>
+      <SteadyText
+        className="ex-verdict"
+        texts={FEC_STEPS.map((s, i) => `${i + 1}/${FEC_STEPS.length} · ${s}`)}
+        index={step}
+        live={manual !== null}
+      />
       <figcaption>
         Simplified, with tiny blocks so it fits. Without interleaving the burst would land in one block: {BURST.size} bad
         bytes, more than its repair bytes can fix. Click to step through at your own pace.
@@ -680,8 +756,12 @@ export function ModesFigure() {
                 <span className="ex-band" style={{ left: `${(lo / SPECTRUM_TOP) * 100}%`, width: `${Math.max(1, ((hi - lo) / SPECTRUM_TOP) * 100)}%` }} />
               </span>
               <span className="dim">
-                {profile.groups} tone{profile.groups > 1 ? 's' : ''} · {Math.round((profile.symbolSeconds + profile.guardSeconds) * 1000)} ms · ~
-                {goodput(m.id)} b/s
+                <span className="ex-mode-range">
+                  {hz(lo)}–{hz(hi)} Hz
+                </span>{' '}
+                {/* Non-breaking spaces keep each value with its unit when the line wraps. */}
+                · {profile.groups}&nbsp;tone{profile.groups > 1 ? 's' : ''} · {Math.round((profile.symbolSeconds + profile.guardSeconds) * 1000)}
+                &nbsp;ms · ~{goodput(m.id)}&nbsp;b/s
               </span>
             </div>
           );
@@ -690,7 +770,9 @@ export function ModesFigure() {
           <span />
           <span className="ex-axis">
             <span>0</span>
-            <span>10 kHz</span>
+            <span>5</span>
+            <span>10</span>
+            <span>15</span>
             <span>20 kHz</span>
           </span>
           <span />

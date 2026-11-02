@@ -1,4 +1,7 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { createContext, useEffect, useState, type RefObject } from 'react';
+
+/** How much presentation mode enlarges the current slide (CSS zoom); 1 in the article. */
+export const SlideZoom = createContext(1);
 
 /** True while the element is on screen; animations pause otherwise, leaving the main thread to the demodulators. */
 export function useVisible(ref: RefObject<Element>): boolean {

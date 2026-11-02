@@ -1,7 +1,5 @@
-// Playback for the explainer's "hear it" buttons, on its own AudioContext so it
-// never touches the app's transmit path. The speaker and microphone are still
-// shared, so the app calls `stopSound()` before every transmission and the page
-// disables demos while the app is sending or receiving.
+// Playback for the explainer's "hear it" buttons. The explainer is a page of
+// its own, so the app is never listening or sending while a demo plays.
 //
 // Nothing here waits on `onended` alone: stopping, a suspended context and a
 // failed start all end the playback straight away, so the buttons never stick.
@@ -97,17 +95,22 @@ function playSamples(id: string, make: (rate: number) => Float32Array): Promise<
   });
 }
 
-/** Sine segments with short fades, as version 1 played them. */
-function render(segments: { hz: number; seconds: number }[], rate: number): Float32Array {
+type Segment = { hz: number; seconds: number; partner?: boolean };
+
+/** Sine segments with short fades, as version 1 played them; `partner` adds its second tone. */
+function render(segments: Segment[], rate: number): Float32Array {
   const total = segments.reduce((t, s) => t + s.seconds, 0);
   const out = new Float32Array(Math.ceil(total * rate));
   let offset = 0;
-  for (const { hz, seconds } of segments) {
+  for (const { hz, seconds, partner } of segments) {
     const n = Math.floor(seconds * rate);
     const fade = Math.min(n / 2, Math.floor(0.005 * rate));
+    const w = (2 * Math.PI * hz) / rate;
+    const w2 = (2 * Math.PI * (hz + V1.partnerOffset)) / rate;
+    const gain = partner ? 0.5 / (1 + V1.partnerGain) : 0.5;
     for (let i = 0; i < n && hz > 0; i++) {
       const env = Math.min(1, i / fade, (n - i) / fade);
-      out[offset + i] = 0.5 * env * Math.sin((2 * Math.PI * hz * i) / rate);
+      out[offset + i] = gain * env * (Math.sin(w * i) + (partner ? V1.partnerGain * Math.sin(w2 * i) : 0));
     }
     offset += n;
   }
@@ -118,14 +121,18 @@ export function playTone(id: string, hz: number, seconds = 0.6) {
   return playSamples(id, (rate) => render([{ hz, seconds }], rate));
 }
 
-/** Version 1: start marker, one pitch per character, end marker. */
+/** Version 1, timed as it was: start marker, each character's pitch and its partner tone, end marker. */
 export function playV1(id: string, text: string) {
-  const segments = [{ hz: V1.start, seconds: V1.markerSeconds }, { hz: 0, seconds: V1.gapSeconds }];
+  const segments: Segment[] = [
+    { hz: 0, seconds: V1.leadSeconds },
+    { hz: V1.start, seconds: V1.markerSeconds },
+    { hz: 0, seconds: V1.gapSeconds },
+  ];
   for (const c of text.toUpperCase()) {
     const hz = V1_FREQUENCIES.get(c);
-    if (hz) segments.push({ hz, seconds: V1.toneSeconds }, { hz: 0, seconds: V1.gapSeconds });
+    if (hz) segments.push({ hz, seconds: V1.toneSeconds, partner: true }, { hz: 0, seconds: V1.gapSeconds });
   }
-  segments.push({ hz: V1.end, seconds: V1.markerSeconds });
+  segments.push({ hz: 0, seconds: V1.endPauseSeconds }, { hz: V1.end, seconds: V1.markerSeconds });
   return playSamples(id, (rate) => render(segments, rate));
 }
 

@@ -6,6 +6,12 @@ export const V1 = {
   toneSeconds: 0.07,
   gapSeconds: 0.03,
   markerSeconds: 0.12,
+  /** Silence before the start marker, and an extra pause before the end marker. */
+  leadSeconds: 0.03,
+  endPauseSeconds: 0.03,
+  /** Each character also sounded a second, quieter tone this far above its pitch (markers didn't). */
+  partnerOffset: 35,
+  partnerGain: 0.75,
   start: 2500,
   end: 2700,
   /** A detected pitch within this distance of a character's pitch counts as that character. */
@@ -22,10 +28,13 @@ export const V1_FREQUENCIES: ReadonlyMap<string, number> = new Map([
   ...run('!@#$%^&*()-_', 1300),
   ['+', 2600],
   ['=', 2800],
-  ...run('{}[]|\\:;"\'<>,.?/`~', 2900),
+  ...run('{}[]|\\:;"\'<>,./?`~', 2900),
   ...run('0123456789', 4700),
   ...run('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 5700),
 ]);
+
+/** Lowest and highest character pitch. */
+export const V1_RANGE = [Math.min(...V1_FREQUENCIES.values()), Math.max(...V1_FREQUENCIES.values())] as const;
 
 export function v1CharAt(frequency: number): string | null {
   for (const [c, f] of V1_FREQUENCIES) if (Math.abs(f - frequency) < V1.tolerance) return c;

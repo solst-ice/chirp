@@ -1,3 +1,95 @@
+/* ── explainer page ─────────────────────────────────── */
+
+.ex-page {
+  min-height: 100vh;
+  padding: 0 2ch var(--cell);
+}
+
+/* Sticky, so the way back is always one tap away. */
+.ex-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -2ch;
+  padding: max(8px, env(safe-area-inset-top)) 2ch 8px;
+  background: var(--bg);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 3ch;
+}
+
+.ex-banner a,
+.ex-banner .btn {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.ex-banner a:hover,
+.ex-banner a:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── presentation mode ───────────────────────────────── */
+
+.ex-present {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  outline: none;
+}
+
+/* margin: auto on the slide centres it, and lets a slide taller than the
+   window (phones) scroll from its top instead of being cut off. */
+.ex-present-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: max(8px, env(safe-area-inset-top)) 2ch 0;
+}
+
+/* The article's column (76ch plus padding), enlarged by Presentation's zoom. */
+.explainer.ex-slide {
+  width: 80ch;
+  max-width: 100%;
+  margin: auto;
+  border: none;
+}
+
+.ex-slide > section:first-child {
+  margin-top: 0;
+}
+
+.explainer .ex-kicker {
+  margin: 0;
+  color: var(--dim);
+}
+
+.ex-present-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 2ch;
+  padding: 8px 2ch max(8px, env(safe-area-inset-bottom));
+  color: var(--dim);
+}
+
+.ex-present-count {
+  min-width: 7ch;
+  text-align: center;
+}
+
+.ex-present-exit {
+  margin-left: 2ch;
+}
+
 /* ── explainer article ──────────────────────────────── */
 
 .explainer {
@@ -8,6 +100,7 @@
   outline: none;
 }
 
+.explainer h1,
 .explainer h2,
 .explainer h3,
 .explainer h4 {
@@ -22,7 +115,7 @@
   gap: 2ch;
 }
 
-.ex-head h2 {
+.ex-head h1 {
   background: var(--accent);
   color: var(--bg);
   padding: 0 1ch;
@@ -34,6 +127,8 @@
 
 .explainer section {
   margin-top: calc(var(--cell) * 2);
+  /* Clear of the sticky banner when scrolled to, e.g. on leaving presentation mode. */
+  scroll-margin-top: calc(var(--cell) * 3);
 }
 
 .explainer h3 {
@@ -131,6 +226,56 @@
 .ex-verdict {
   margin-top: 8px !important;
   overflow-wrap: anywhere;
+}
+
+/* SteadyText: every text in one grid cell, only the current one visible. */
+.ex-steady {
+  display: grid;
+}
+
+.ex-steady > span:not(.sr-only) {
+  grid-area: 1 / 1;
+}
+
+.ex-steady-off {
+  visibility: hidden;
+}
+
+/* Version 1's character table */
+.ex-v1map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--cell) 5ch;
+}
+
+.ex-v1map table {
+  border-collapse: collapse;
+}
+
+.ex-v1map caption {
+  white-space: nowrap;
+  text-align: left;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.ex-v1map th,
+.ex-v1map td {
+  padding: 0;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.ex-v1map th {
+  text-align: left;
+  padding-right: 2ch;
+}
+
+.ex-v1map td {
+  text-align: right;
 }
 
 .ex-input {
@@ -344,6 +489,10 @@
 
 .ex-mode-name {
   color: var(--rx);
+}
+
+.ex-mode-range {
+  color: var(--fg);
 }
 
 .ex-track {

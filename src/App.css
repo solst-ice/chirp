@@ -525,9 +525,10 @@ details > summary:focus-visible {
   color: var(--accent);
 }
 
-.explain-toggle {
+.keybar .explain-toggle {
   flex-shrink: 0;
   color: var(--accent);
+  text-decoration: none;
 }
 
 .hotkeys .key {

@@ -93,6 +93,7 @@ Then open your browser to the URL shown in the terminal (usually http://localhos
 5. [ TEST ] / alt+t plays a test frame and checks that the same device decodes it, which tells you whether its speaker and microphone work in that mode
 6. The status bar shows whether the microphone is live, with RETRY MIC / LISTEN / STOP as needed; without a microphone Chirp can still send
 7. The LINK panel's diagnostics show per-mode sync/frame/error counts and the signal margin of the last frame
+8. [ ? EXPLAIN THIS ] opens a separate page on how data travels through sound, with playable demos; it replaces the app in the tab, so nothing can be received there until you go back
 
 ### Development
 
