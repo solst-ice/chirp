@@ -111,7 +111,7 @@ export function frameBytes(p: MfskProfile, frame: Frame): Uint8Array {
   return out;
 }
 
-const toneFrequency = (p: MfskProfile, bin: number) => p.baseFrequency + bin * p.toneSpacing;
+export const toneFrequency = (p: MfskProfile, bin: number) => p.baseFrequency + bin * p.toneSpacing;
 const toneSets = (p: MfskProfile) => (p.alternate ? 2 : 1);
 const binCount = (p: MfskProfile) => p.groups * TONES * toneSets(p);
 /**
@@ -119,7 +119,7 @@ const binCount = (p: MfskProfile) => p.groups * TONES * toneSets(p);
  * The demodulator's partial `measure(start, symbol)` computes exactly the bins this
  * can return for that symbol, so it must stay the only way a symbol's bins are chosen.
  */
-const binOf = (p: MfskProfile, value: number, group: number, symbol: number) =>
+export const binOf = (p: MfskProfile, value: number, group: number, symbol: number) =>
   (value * p.groups + group) * toneSets(p) + (symbol % toneSets(p));
 const symbolPeriod = (p: MfskProfile) => p.symbolSeconds + p.guardSeconds;
 

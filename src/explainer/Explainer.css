@@ -156,6 +156,11 @@
   color: var(--tx);
 }
 
+/* A closer look within a section, rather than one of version 2's fixes. */
+.ex-detail h4 {
+  color: var(--rx);
+}
+
 .ex-fix h4 + p {
   margin-top: 4px;
 }
@@ -251,6 +256,49 @@
 
 .ex-v1map table {
   border-collapse: collapse;
+}
+
+/* Which pitch carries which bits */
+.ex-pitches {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+}
+
+.ex-pitches th,
+.ex-pitches td {
+  padding: 0 1ch 0 0;
+  text-align: left;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.ex-pitches thead th {
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+}
+
+.ex-pitches td:last-child,
+.ex-pitches th:last-child {
+  text-align: right;
+}
+
+.ex-pitches td:nth-child(2) {
+  white-space: normal;
+}
+
+.ex-group-rx {
+  color: var(--rx);
+}
+.ex-group-tx {
+  color: var(--tx);
+}
+.ex-group-warn {
+  color: var(--warn);
+}
+.ex-group-accent {
+  color: var(--accent);
 }
 
 .ex-v1map caption {

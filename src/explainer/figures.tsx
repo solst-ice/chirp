@@ -4,7 +4,7 @@
 // idea, and say so in their captions.
 
 import { useMemo, useRef, useState } from 'react';
-import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, frameBytes, frameTones } from '../modem/mfsk';
+import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, binOf, frameBytes, frameTones, toneFrequency } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import { FrameType } from '../modem/types';
 import Canvas, { type Draw } from './Canvas';
@@ -515,6 +515,110 @@ export function FrameFigure({ value }: { value: string }) {
       <figcaption>
         Your text above, exactly as FAST sends it, slowed down 10×. Time runs left to right, pitch bottom to top. Every column is
         one slot with four tones.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 5b+ · which pitch carries which bits ───────────── */
+
+const GROUP_COLORS = ['rx', 'tx', 'warn', 'accent'] as const;
+const bits = (n: number) => n.toString(2).padStart(4, '0');
+/** The real modem's pitch for a 4-bit value in a group, on an even (0) or odd (1) slot. */
+const pitchOf = (value: number, group: number, parity: number) => toneFrequency(FAST, binOf(FAST, value, group, parity));
+
+export function PitchFigure({ value }: { value: string }) {
+  const [pair, setPair] = useState(0);
+  const [odd, setOdd] = useState(false);
+  const bytes = enc.encode(value);
+  const pairs = Math.max(1, Math.ceil(bytes.length / 2));
+  const at = Math.min(pair, pairs - 1);
+  // A slot's two bytes, high nibble first, fill groups 0–3 in order; a missing byte is sent as 0.
+  const slotBytes = [bytes[at * 2] ?? 0, bytes[at * 2 + 1] ?? 0];
+  const nibbles = slotBytes.flatMap((b) => [b >> 4, b & 15]);
+  const parity = odd ? 1 : 0;
+  const lo = FAST.baseFrequency;
+  const hi = pitchOf(15, FAST.groups - 1, 1);
+
+  const draw: Draw = (ctx, w, h) => {
+    const p = palette();
+    const left = 1;
+    const x = (f: number) => left + ((f - lo) / (hi - lo)) * (w - 2 * left);
+    const base = h - 22;
+    // Every pitch this slot could use, coloured by group.
+    for (let g = 0; g < FAST.groups; g++) {
+      ctx.fillStyle = p[GROUP_COLORS[g]];
+      ctx.globalAlpha = 0.45;
+      for (let v = 0; v < 16; v++) ctx.fillRect(Math.round(x(pitchOf(v, g, parity))) - 1, base - 8, 2, 8);
+    }
+    ctx.globalAlpha = 1;
+    // The four that play, with their bits.
+    nibbles.forEach((v, g) => {
+      const px = Math.round(x(pitchOf(v, g, parity)));
+      ctx.fillStyle = p[GROUP_COLORS[g]];
+      ctx.fillRect(px - 2, base - 52 + g * 8, 4, 52 - g * 8);
+      text(ctx, bits(v), px, 4 + g * 14, p[GROUP_COLORS[g]], px > w - 40 ? 'right' : px < 40 ? 'left' : 'center');
+    });
+    ctx.fillStyle = p.line;
+    ctx.fillRect(0, base, w, 1);
+    for (const f of [1500, 3000, 4500, 6000, 7500]) text(ctx, `${f / 1000}k`, x(f), base + 6, p.dim, f === 1500 ? 'left' : 'center');
+  };
+
+  const char = (i: number) => {
+    const b = bytes[at * 2 + i];
+    if (b === undefined) return '(padding)';
+    return b >= 0x20 && b < 0x7f ? `"${String.fromCharCode(b)}"` : '(part of a character)';
+  };
+
+  return (
+    <figure className="ex-figure">
+      <Canvas
+        height={110}
+        label={`Every pitch an ${odd ? 'odd' : 'even'} FAST slot can use, with the four that carry bytes ${slotBytes.map(hex).join(' ')}`}
+        draw={draw}
+        redraw={`${nibbles.join()}|${parity}`}
+      />
+      <table className="ex-pitches">
+        <thead>
+          <tr>
+            <th scope="col">tone</th>
+            <th scope="col">from byte</th>
+            <th scope="col">bits</th>
+            <th scope="col">pitch</th>
+          </tr>
+        </thead>
+        <tbody>
+          {nibbles.map((v, g) => (
+            <tr key={g}>
+              <th scope="row" className={`ex-group-${GROUP_COLORS[g]}`}>
+                {g + 1}
+              </th>
+              <td>
+                {hex(slotBytes[g >> 1])} {char(g >> 1)}, {g % 2 ? 'low' : 'high'} half
+              </td>
+              <td>{bits(v)}</td>
+              <td>{hz(pitchOf(v, g, parity))} Hz</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="ex-controls">
+        <button className="btn" onClick={() => setPair((at + pairs - 1) % pairs)} aria-label="Previous two bytes">
+          [ ← ]
+        </button>
+        <span className="ex-readout">
+          bytes {at * 2 + 1}–{at * 2 + 2} of {bytes.length}
+        </span>
+        <button className="btn" onClick={() => setPair((at + 1) % pairs)} aria-label="Next two bytes">
+          [ → ]
+        </button>
+        <button className="btn" onClick={() => setOdd(!odd)} aria-pressed={odd}>
+          [ {odd ? 'ODD' : 'EVEN'} SLOT ]
+        </button>
+      </div>
+      <figcaption>
+        Two bytes of your text as one slot plays them. Each tone has its own 16 pitches, 400 Hz apart; the four sets interleave
+        100 Hz apart, so no two tones in a slot ever share a pitch. Odd slots move every pitch up 50 Hz.
       </figcaption>
     </figure>
   );

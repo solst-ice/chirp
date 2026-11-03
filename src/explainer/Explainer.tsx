@@ -11,6 +11,7 @@ import {
   FrameFigure,
   ModesFigure,
   NibbleFigure,
+  PitchFigure,
   SyncFigure,
   ToneFigure,
   V1Figure,
@@ -37,13 +38,14 @@ function Fix({ id, title, children }: { id?: string; title: string; children: Re
 }
 
 /**
- * One slide-sized piece of the article: a numbered section, or one of version
- * 2's fixes. The article shows them in order; presentation mode one at a time.
+ * One slide-sized piece of the article: a numbered section, or a part of one
+ * (a version 2 fix, or a closer look). The article shows them in order;
+ * presentation mode one at a time.
  */
 interface Block {
   id: string;
   title: string;
-  kind?: 'fix';
+  kind?: 'fix' | 'detail';
   /** The numbered section a part belongs to, shown above it on its slide. */
   kicker?: string;
   body: React.ReactNode;
@@ -180,6 +182,24 @@ export default function Explainer() {
             instead of scanning the whole spectrum.
           </p>
           <FrameFigure value={demo} />
+        </>
+      ),
+    },
+    {
+      id: 'pitches',
+      title: 'Which pitch means which bits',
+      kind: 'detail',
+      kicker: FIXES_HEADING,
+      body: (
+        <>
+          <p>
+            Each tone is 4 bits, so it has 16 possible pitches, one for every value from 0000 to 1111. But the four tones in a
+            slot don't share one set of 16: each has its own. Tone 1's pitches start at 1,500 Hz and climb 400 Hz per value;
+            tone 2's sit 100 Hz above them, tone 3's 200 Hz, tone 4's 300 Hz. The four sets interleave, so two tones in a slot
+            can never land on the same pitch, even when they carry the same bits, and the receiver reads each one as if it
+            were alone. Four tones of 4 bits make 2 bytes every 30 ms slot.
+          </p>
+          <PitchFigure value={demo} />
         </>
       ),
     },
@@ -322,6 +342,11 @@ export default function Explainer() {
       <Fix id={id} title={b.title}>
         {b.body}
       </Fix>
+    ) : b.kind === 'detail' ? (
+      <section className="ex-fix ex-detail" id={id}>
+        <h4>{b.title}</h4>
+        {b.body}
+      </section>
     ) : (
       <section id={id}>
         <h3>{b.title}</h3>
