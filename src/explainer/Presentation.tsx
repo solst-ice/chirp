@@ -108,14 +108,19 @@ export default function Presentation({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+      // Escape leaves from anywhere, a text field or slider included.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onExit();
+        return;
+      }
       // Sliders and text fields keep their own arrow keys.
       if ((e.target as HTMLElement).closest?.('input, textarea, select')) return;
       if (e.key === 'ArrowRight' || e.key === 'PageDown') go(index + 1);
       else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(index - 1);
       else if (e.key === 'Home') go(0);
       else if (e.key === 'End') go(last);
-      else if (e.key === 'Escape') onExit();
       else return;
       e.preventDefault();
     };

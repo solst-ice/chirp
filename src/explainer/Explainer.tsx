@@ -176,10 +176,9 @@ export default function Explainer() {
           <p>
             Sound is cut into fixed slots: 30 ms each in FAST. Each slot holds its tones steady for 20 ms, the stretch the
             receiver measures, with 5 ms fades at either end so one slot blends into the next without clicks. Two equal values
-            are simply two slots, so doubles survive. Each slot sounds four tones at once, one from each of four sets of 16, so
-            it carries four nibbles, two bytes. Tones sit exactly 50 Hz apart (1 ÷ 20 ms), which keeps them from bleeding into
-            each other over that 20 ms. That lets the receiver measure exactly those frequencies at exactly those moments,
-            instead of scanning the whole spectrum.
+            are simply two slots, so doubles survive. Each slot sounds four tones at once, each carrying one nibble, so a slot
+            carries two bytes. The receiver knows when each slot starts and which pitches it can contain, so it measures just
+            those, instead of scanning the whole spectrum.
           </p>
           <FrameFigure value={demo} />
         </>
@@ -193,11 +192,28 @@ export default function Explainer() {
       body: (
         <>
           <p>
-            Each tone is 4 bits, so it has 16 possible pitches, one for every value from 0000 to 1111. But the four tones in a
-            slot don't share one set of 16: each has its own. Tone 1's pitches start at 1,500 Hz and climb 400 Hz per value;
-            tone 2's sit 100 Hz above them, tone 3's 200 Hz, tone 4's 300 Hz. The four sets interleave, so two tones in a slot
-            can never land on the same pitch, even when they carry the same bits, and the receiver reads each one as if it
-            were alone. Four tones of 4 bits make 2 bytes every 30 ms slot.
+            Each tone carries 4 bits, so it needs 16 pitches, one for every value from 0000 to 1111. Three spacings, from fine
+            to coarse, decide where they go (these are FAST's numbers):
+          </p>
+          <ul className="ex-list ex-points">
+            <li>
+              <em>50 Hz, the grid.</em> Every pitch sits on a 50 Hz step. Over the receiver's 20 ms window, a tone one
+              step higher fits exactly one more cycle (1 ÷ 20 ms = 50 Hz), so ideally measuring one step picks up nothing from
+              its neighbours. In a real room, echoes and speakers blur that a little.
+            </li>
+            <li>
+              <em>100 Hz, within a slot.</em> A slot uses only every other step: tone set A, or tone set B one step up
+              (the next fix explains why). The four tones take its pitches in turn: tone 1 at 1,500 Hz, tone 2 at 1,600, tone 3
+              at 1,700, tone 4 at 1,800, then tone 1 again at 1,900.
+            </li>
+            <li>
+              <em>400 Hz, between values.</em> So each tone's own 16 pitches are 400 Hz apart: tone 1 plays 1,500 Hz
+              for 0000, 1,900 Hz for 0001, and so on up to 7,500 Hz for 1111.
+            </li>
+          </ul>
+          <p>
+            Because the four tones never share a pitch, even when they carry the same bits, the receiver reads each one as if it
+            were alone.
           </p>
           <PitchFigure value={demo} />
         </>
@@ -211,8 +227,8 @@ export default function Explainer() {
       body: (
         <>
           <p>
-            Even and odd slots use two different sets of tones, offset by one step. When a tone echoes into the next slot, it
-            rings on a frequency the receiver isn't reading.
+            Slots alternate between tone set A and tone set B, the two halves of the 50 Hz grid. When a tone echoes into the
+            next slot, it rings on a pitch that slot doesn't use, so the receiver isn't reading it.
           </p>
           <EchoFigure />
         </>
@@ -317,7 +333,7 @@ export default function Explainer() {
               <tr>
                 <th scope="row">mistakes</th>
                 <td>shown as if correct</td>
-                <td>repaired, or flagged as corrupted</td>
+                <td>repaired, flagged, or sometimes not heard at all</td>
               </tr>
             </tbody>
           </table>
@@ -330,6 +346,35 @@ export default function Explainer() {
             Version 2's HELLO is a real transmission: another device running chirp within earshot will receive it.
           </p>
         </>
+      ),
+    },
+    {
+      id: 'using',
+      title: '7 · Using it',
+      body: (
+        <ul className="ex-list ex-points">
+          <li>
+            Start with FAST. If a message arrives corrupted, or not at all, send it again in ROBUST: slower, but steadier in
+            noisy or echoey rooms. The receiver listens for every mode at once, so only the sender has to switch.
+          </li>
+          <li>
+            Keep chirp in front on the receiving device, with the screen on. Browsers may pause the microphone in a background
+            tab or when the screen locks.
+          </li>
+          <li>
+            Check the receiving device. Sending is one-way: nothing replies, so "sent" means the sound played, not that anything
+            heard it. A message has arrived once the receiver's log shows it complete.
+          </li>
+          <li>
+            Before relying on INAUDIBLE, press TEST on each device: many speakers and microphones barely reproduce 18–19 kHz,
+            and Bluetooth audio doesn't carry it. And it is inaudible only to most adults. Children, teenagers and pets such as
+            dogs and cats can hear it, and it may bother them.
+          </li>
+          <li>
+            Treat every message as public. Anyone within earshot running chirp receives it, nothing is encrypted, and the
+            checksum shows that the data arrived intact, not who sent it.
+          </li>
+        </ul>
       ),
     },
   ];
@@ -388,12 +433,15 @@ export default function Explainer() {
 
   return (
     <>
-      <nav className="ex-banner" aria-label="Page">
-        <a href="/">[ ← GO BACK TO APP ]</a>
-        <button ref={presentRef} className="btn" onClick={present}>
-          [ ▶ PRESENTATION MODE ]
-        </button>
-      </nav>
+      {/* Not rendered while presenting: the slides cover it, and keyboard focus must stay on them. */}
+      {!presenting && (
+        <nav className="ex-banner" aria-label="Page">
+          <a href="/">[ ← GO BACK TO APP ]</a>
+          <button ref={presentRef} className="btn" onClick={present}>
+            [ ▶ PRESENTATION MODE ]
+          </button>
+        </nav>
+      )}
       {presenting ? (
         <Presentation slides={slides} index={slide} onIndex={setSlide} onExit={exit} />
       ) : (

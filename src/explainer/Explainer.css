@@ -180,6 +180,12 @@
   color: var(--err);
 }
 
+/* A plain list: points, not problems. */
+.ex-points li::before {
+  content: '› ';
+  color: var(--accent);
+}
+
 /* ── figures ───────────────────────────────────────── */
 
 .ex-figure {
@@ -361,20 +367,44 @@
   color: var(--fg);
 }
 
+/* A character's bytes side by side; each byte is its hex value over its two nibbles. */
+.ex-bytes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 1ch;
+}
+
 .ex-byte {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ex-halves {
   display: flex;
   gap: 2px;
 }
 
-.ex-byte .dim {
-  margin-right: 2px;
-}
-
+/* A nibble: binary over its value 0–15. */
 .ex-nib {
-  min-width: 2ch;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 4ch;
+  padding: 0 0.5ch;
   background: var(--sel);
   color: var(--rx);
+}
+
+.ex-bits {
+  color: var(--fg);
+}
+
+/* Shown only when typing hits the example's byte limit; keeps no space otherwise. */
+.ex-limit:empty {
+  margin: 0;
 }
 
 /* Echo diagram */

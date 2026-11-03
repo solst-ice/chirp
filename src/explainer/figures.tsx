@@ -4,11 +4,11 @@
 // idea, and say so in their captions.
 
 import { useMemo, useRef, useState } from 'react';
-import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, binOf, frameBytes, frameTones, toneFrequency } from '../modem/mfsk';
+import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, binOf, toneFrequency } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
-import { FrameType } from '../modem/types';
 import Canvas, { type Draw } from './Canvas';
 import { SAMPLE_RATE, V1, V1_FREQUENCIES, V1_RANGE, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
+import { FAST, FIRST_TEXT_SLOT, PREAMBLE_SLOTS, type Role, type SlotTone, fastFrame, slotTones, toneSet } from './frame';
 import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
 import { playTone, playV1, stopSound, useSound } from './sound';
 
@@ -41,7 +41,10 @@ export function DemoNote({ ids }: { ids: string[] }) {
     </span>
   );
 }
-const hex = (b: number) => b.toString(16).padStart(2, '0');
+/** A byte in hexadecimal, marked as such: 0x48. */
+const hex = (b: number) => `0x${b.toString(16).padStart(2, '0')}`;
+/** A nibble in binary: 0100. */
+const bits = (n: number) => n.toString(2).padStart(4, '0');
 const hz = (f: number) => Math.round(f).toLocaleString('en-US');
 
 /**
@@ -379,9 +382,24 @@ export function FftFigure() {
 
 export const MAX_DEMO_BYTES = 40;
 
+/** As many whole characters of `s` as fit in the example's byte limit. */
+function fitDemo(s: string): string {
+  let out = '';
+  let size = 0;
+  for (const c of s) {
+    size += enc.encode(c).length;
+    if (size > MAX_DEMO_BYTES) break;
+    out += c;
+  }
+  return out;
+}
+
 export function NibbleFigure({ value, onChange }: { value: string; onChange: (s: string) => void }) {
+  const [clipped, setClipped] = useState(false);
   const chars = Array.from(value);
   const total = enc.encode(value).length;
+  // The caption's worked example: the first byte typed, or H's.
+  const b = enc.encode(value)[0] ?? 0x48;
   return (
     <figure className="ex-figure">
       <label className="ex-input">
@@ -390,26 +408,45 @@ export function NibbleFigure({ value, onChange }: { value: string; onChange: (s:
           value={value}
           spellCheck={false}
           aria-label="Text to encode"
-          onChange={(e) => enc.encode(e.target.value).length <= MAX_DEMO_BYTES && onChange(e.target.value)}
+          onChange={(e) => {
+            const fitted = fitDemo(e.target.value);
+            setClipped(fitted !== e.target.value);
+            onChange(fitted);
+          }}
         />
       </label>
+      <p className="ex-limit warn" role="status">
+        {clipped
+          ? `This example stops at ${MAX_DEMO_BYTES} bytes so the figures stay readable. The app itself sends up to ${FAST.maxPayload.toLocaleString('en-US')} bytes in FAST.`
+          : ''}
+      </p>
       <div className="ex-nibbles">
         {chars.map((c, i) => (
           <div className="ex-char" key={i}>
             <span className="ex-glyph">{c === ' ' ? '␠' : c}</span>
-            {Array.from(enc.encode(c)).map((b, j) => (
-              <span className="ex-byte" key={j}>
-                <span className="dim">{hex(b)}</span>
-                <span className="ex-nib">{b >> 4}</span>
-                <span className="ex-nib">{b & 15}</span>
-              </span>
-            ))}
+            <span className="ex-bytes">
+              {Array.from(enc.encode(c)).map((byte, j) => (
+                <span className="ex-byte" key={j}>
+                  <span className="dim">{hex(byte)}</span>
+                  <span className="ex-halves">
+                    {[byte >> 4, byte & 15].map((v, k) => (
+                      <span className="ex-nib" key={k}>
+                        <span className="ex-bits">{bits(v)}</span>
+                        {v}
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              ))}
+            </span>
           </div>
         ))}
       </div>
       <figcaption>
-        {total} bytes → {total * 2} nibbles, each a number from 0 to 15, so each is one of 16 tones. Try lowercase or an emoji:
-        version 1 had no pitch for them.
+        Each character becomes one to four bytes (UTF-8). A byte is shown in hexadecimal, base 16, so {hex(b)} is {b}. Its two
+        4-bit halves are shown in binary, then as a number from 0 to 15: {hex(b)} → {bits(b >> 4)} | {bits(b & 15)} →{' '}
+        {b >> 4} | {b & 15}. {total} bytes → {total * 2} nibbles, each one of 16 tones. Try lowercase or an emoji: version 1
+        had no pitch for them.
       </figcaption>
     </figure>
   );
@@ -426,9 +463,7 @@ const quoted = (bytes: number[]) => {
   }
 };
 
-const FAST = PROFILES[0];
-const PREAMBLE_SLOTS = PREAMBLE.length;
-type Role = 'sync' | 'header' | 'message' | 'check' | 'repair' | 'pad';
+const ROLE_LABELS: Record<Role, string> = { sync: 'sync', header: 'header', message: 'message', check: 'checksum', repair: 'repair bytes', pad: '' };
 
 export function FrameFigure({ value }: { value: string }) {
   const ref = useRef<HTMLElement>(null);
@@ -436,25 +471,14 @@ export function FrameFigure({ value }: { value: string }) {
   const reduced = useReducedMotion();
   const slotMs = (FAST.symbolSeconds + FAST.guardSeconds) * 1000;
   const tick = useTicker(slotMs * 10, visible && !reduced);
-  const { tones, bytes, roles, payload } = useMemo(() => {
-    const payload = enc.encode(value);
-    const frame = { type: FrameType.Text, payload };
-    const tones = frameTones(FAST, frame);
-    const bytes = frameBytes(FAST, frame);
-    const role = (byte: number): Role =>
-      byte < HEADER_BYTES ? 'header' : byte < HEADER_BYTES + payload.length ? 'message' : byte < HEADER_BYTES + payload.length + CRC_BYTES ? 'check' : byte < bytes.length ? 'repair' : 'pad';
-    const roles = tones.map((_, s): Role => (s < PREAMBLE_SLOTS ? 'sync' : role((s - PREAMBLE_SLOTS) * 2)));
-    return { tones, bytes, roles, payload };
-  }, [value]);
+  const { tones, bytes, roles, payload } = useMemo(() => fastFrame(enc.encode(value)), [value]);
   const n = tones.length;
   const current = reduced ? -1 : tick % (n + 4);
-  const bytesPerSlot = FAST.groups / 2;
 
   const colors = () => {
     const p = palette();
     return { sync: p.accent, header: p.warn, message: p.rx, check: p.tx, repair: p.fg, pad: p.dim } satisfies Record<Role, string>;
   };
-  const LABELS: Record<Role, string> = { sync: 'sync', header: 'header', message: 'message', check: 'checksum', repair: 'repair bytes', pad: '' };
 
   const draw: Draw = (ctx, w, h) => {
     const p = palette();
@@ -488,33 +512,43 @@ export function FrameFigure({ value }: { value: string }) {
       ctx.globalAlpha = 0.7;
       ctx.fillRect(x0 + 1, bottom + 6, x1 - x0 - 2, 6);
       ctx.globalAlpha = 1;
-      const label = LABELS[roles[start]];
+      const label = ROLE_LABELS[roles[start]];
       if (label && label.length * CELL < x1 - x0) text(ctx, label, (x0 + x1) / 2, bottom + 18, c[roles[start]], 'center');
       start = s;
     }
   };
 
   const paddingMs = Math.round((LEAD_IN_SECONDS + TAIL_SECONDS) * 1000);
-  // The summary, then one line per slot; all of them reserve space (see SteadyText).
+  // The summary, then one line per part of the frame. A line stays up while its
+  // part plays, long enough to read; the next figure takes single slots apart.
+  const sections: { role: Role; from: number; to: number }[] = [];
+  roles.forEach((role, s) => {
+    const last = sections[sections.length - 1];
+    if (last && last.role === role) last.to = s;
+    else sections.push({ role, from: s, to: s });
+  });
+  const repairBytes = bytes.length - HEADER_BYTES - payload.length - CRC_BYTES;
+  const PARTS: Record<Role, string> = {
+    sync: 'sync: a fixed pattern that marks the start',
+    header: 'header: the mode, message type and length, with repair bytes of its own',
+    message: `your text:${quoted(Array.from(payload))}`,
+    check: 'checksum: confirms the text arrived intact',
+    repair: `${repairBytes} repair bytes: enough to fix mistakes`,
+    pad: 'padding',
+  };
   const readouts = [
     `${payload.length} bytes of text become ${n} slots of ${slotMs} ms, plus ${paddingMs} ms of quiet lead-in and tail = ${getModem('fast').airtime(payload.length).toFixed(2)} s of sound`,
-    ...tones.map((slot, s) => {
-      const values = slot.map((bin) => Math.floor((bin >> 1) / FAST.groups));
-      if (roles[s] === 'sync') return `slot ${s + 1} · tones ${values.join(' · ')} · a fixed pattern that marks the start`;
-      const first = (s - PREAMBLE_SLOTS) * bytesPerSlot;
-      const slice = Array.from(bytes.subarray(first, first + bytesPerSlot));
-      const asText = roles[s] === 'message' ? quoted(slice.filter((_, i) => first + i < HEADER_BYTES + payload.length)) : '';
-      return `slot ${s + 1} · tones ${values.join(' · ')} → bytes ${slice.map(hex).join(' ')} · ${LABELS[roles[s]] || 'padding'}${asText}`;
-    }),
+    ...sections.map(({ role, from, to }) => `${from === to ? `slot ${from + 1}` : `slots ${from + 1}–${to + 1}`} · ${PARTS[role]}`),
   ];
+  const playing = current >= 0 && current < n ? sections.findIndex((x) => current <= x.to) + 1 : 0;
 
   return (
     <figure className="ex-figure" ref={ref}>
       <Canvas height={230} label={`Your text as FAST sends it: ${n} slots of four tones each`} draw={draw} redraw={`${current}|${value}`} />
-      <SteadyText className="ex-verdict dim" texts={readouts} index={current >= 0 && current < n ? current + 1 : 0} />
+      <SteadyText className="ex-verdict dim" texts={readouts} index={playing} />
       <figcaption>
         Your text above, exactly as FAST sends it, slowed down 10×. Time runs left to right, pitch bottom to top. Every column is
-        one slot with four tones.
+        one slot with four tones; the next figure takes one apart.
       </figcaption>
     </figure>
   );
@@ -523,20 +557,28 @@ export function FrameFigure({ value }: { value: string }) {
 /* ── 5b+ · which pitch carries which bits ───────────── */
 
 const GROUP_COLORS = ['rx', 'tx', 'warn', 'accent'] as const;
-const bits = (n: number) => n.toString(2).padStart(4, '0');
-/** The real modem's pitch for a 4-bit value in a group, on an even (0) or odd (1) slot. */
-const pitchOf = (value: number, group: number, parity: number) => toneFrequency(FAST, binOf(FAST, value, group, parity));
+/** The real modem's pitch for a 4-bit value in a group, in a given slot (which picks tone set A or B). */
+const pitchOf = (value: number, group: number, slot: number) => toneFrequency(FAST, binOf(FAST, value, group, slot));
+
+const SOURCE_LABELS: Partial<Record<Role, string>> = { header: 'header', check: 'checksum', repair: 'repair byte' };
+
+/** Where a tone's bits come from, for the pitch table: 0x48 "H", high half. */
+function toneSource(t: SlotTone) {
+  if (t.byte === undefined) return 'padding after the last byte';
+  const what = t.role === 'message' ? (t.byte >= 0x20 && t.byte < 0x7f ? `"${String.fromCharCode(t.byte)}"` : '(part of a character)') : `(${SOURCE_LABELS[t.role]})`;
+  return `${hex(t.byte)} ${what}, ${t.half} half`;
+}
 
 export function PitchFigure({ value }: { value: string }) {
-  const [pair, setPair] = useState(0);
-  const [odd, setOdd] = useState(false);
-  const bytes = enc.encode(value);
-  const pairs = Math.max(1, Math.ceil(bytes.length / 2));
-  const at = Math.min(pair, pairs - 1);
-  // A slot's two bytes, high nibble first, fill groups 0–3 in order; a missing byte is sent as 0.
-  const slotBytes = [bytes[at * 2] ?? 0, bytes[at * 2 + 1] ?? 0];
-  const nibbles = slotBytes.flatMap((b) => [b >> 4, b & 15]);
-  const parity = odd ? 1 : 0;
+  const frame = useMemo(() => fastFrame(enc.encode(value)), [value]);
+  const [chosen, setChosen] = useState(FIRST_TEXT_SLOT);
+  const n = frame.tones.length;
+  const slot = Math.min(chosen, n - 1);
+  const tones = slotTones(frame, slot);
+  const set = toneSet(slot);
+  const dataSlots = n - PREAMBLE_SLOTS;
+  // The arrows step through every slot that carries bytes, wrapping around; the sync slots carry none.
+  const step = (by: number) => setChosen(PREAMBLE_SLOTS + ((slot - PREAMBLE_SLOTS + by + dataSlots) % dataSlots));
   const lo = FAST.baseFrequency;
   const hi = pitchOf(15, FAST.groups - 1, 1);
 
@@ -545,38 +587,43 @@ export function PitchFigure({ value }: { value: string }) {
     const left = 1;
     const x = (f: number) => left + ((f - lo) / (hi - lo)) * (w - 2 * left);
     const base = h - 22;
-    // Every pitch this slot could use, coloured by group.
+    // Every pitch this slot could use, coloured by tone.
     for (let g = 0; g < FAST.groups; g++) {
       ctx.fillStyle = p[GROUP_COLORS[g]];
       ctx.globalAlpha = 0.45;
-      for (let v = 0; v < 16; v++) ctx.fillRect(Math.round(x(pitchOf(v, g, parity))) - 1, base - 8, 2, 8);
+      for (let v = 0; v < 16; v++) ctx.fillRect(Math.round(x(pitchOf(v, g, slot))) - 1, base - 8, 2, 8);
     }
     ctx.globalAlpha = 1;
-    // The four that play, with their bits.
-    nibbles.forEach((v, g) => {
-      const px = Math.round(x(pitchOf(v, g, parity)));
+    // The four that play, each bar reaching up to its label. Each label has its own
+    // 16 px text row and clears a gap in any neighbouring bar that passes behind it.
+    const xs = tones.map((t) => Math.round(x(t.frequency)));
+    tones.forEach((_, g) => {
+      const top = 4 + (g + 1) * 16 + 2;
       ctx.fillStyle = p[GROUP_COLORS[g]];
-      ctx.fillRect(px - 2, base - 52 + g * 8, 4, 52 - g * 8);
-      text(ctx, bits(v), px, 4 + g * 14, p[GROUP_COLORS[g]], px > w - 40 ? 'right' : px < 40 ? 'left' : 'center');
+      ctx.fillRect(xs[g] - 2, top, 4, base - top);
+    });
+    tones.forEach((t, g) => {
+      const label = bits(t.value);
+      const width = ctx.measureText(label).width;
+      const align = xs[g] > w - 40 ? 'right' : xs[g] < 40 ? 'left' : 'center';
+      const x0 = align === 'right' ? xs[g] - width : align === 'left' ? xs[g] : xs[g] - width / 2;
+      ctx.clearRect(x0 - 2, 2 + g * 16, width + 4, 18);
+      text(ctx, label, xs[g], 4 + g * 16, p[GROUP_COLORS[g]], align);
     });
     ctx.fillStyle = p.line;
     ctx.fillRect(0, base, w, 1);
     for (const f of [1500, 3000, 4500, 6000, 7500]) text(ctx, `${f / 1000}k`, x(f), base + 6, p.dim, f === 1500 ? 'left' : 'center');
   };
 
-  const char = (i: number) => {
-    const b = bytes[at * 2 + i];
-    if (b === undefined) return '(padding)';
-    return b >= 0x20 && b < 0x7f ? `"${String.fromCharCode(b)}"` : '(part of a character)';
-  };
+  const slotBytes = tones.filter((t) => t.half === 'high').map((t) => (t.byte === undefined ? 'padding' : hex(t.byte)));
 
   return (
     <figure className="ex-figure">
       <Canvas
         height={110}
-        label={`Every pitch an ${odd ? 'odd' : 'even'} FAST slot can use, with the four that carry bytes ${slotBytes.map(hex).join(' ')}`}
+        label={`Slot ${slot + 1} uses tone set ${set}. Its four tones carry bytes ${slotBytes.join(' and ')} at ${tones.map((t) => hz(t.frequency)).join(', ')} Hz.`}
         draw={draw}
-        redraw={`${nibbles.join()}|${parity}`}
+        redraw={`${slot}|${tones.map((t) => t.value).join()}`}
       />
       <table className="ex-pitches">
         <thead>
@@ -588,37 +635,34 @@ export function PitchFigure({ value }: { value: string }) {
           </tr>
         </thead>
         <tbody>
-          {nibbles.map((v, g) => (
+          {tones.map((t, g) => (
             <tr key={g}>
               <th scope="row" className={`ex-group-${GROUP_COLORS[g]}`}>
                 {g + 1}
               </th>
-              <td>
-                {hex(slotBytes[g >> 1])} {char(g >> 1)}, {g % 2 ? 'low' : 'high'} half
-              </td>
-              <td>{bits(v)}</td>
-              <td>{hz(pitchOf(v, g, parity))} Hz</td>
+              <td>{toneSource(t)}</td>
+              <td>{bits(t.value)}</td>
+              <td>{hz(t.frequency)} Hz</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {/* Both arrows first, so a narrow screen wraps the readout rather than splitting them. */}
       <div className="ex-controls">
-        <button className="btn" onClick={() => setPair((at + pairs - 1) % pairs)} aria-label="Previous two bytes">
+        <button className="btn" onClick={() => step(-1)} aria-label="Previous slot">
           [ ← ]
         </button>
-        <span className="ex-readout">
-          bytes {at * 2 + 1}–{at * 2 + 2} of {bytes.length}
-        </span>
-        <button className="btn" onClick={() => setPair((at + 1) % pairs)} aria-label="Next two bytes">
+        <button className="btn" onClick={() => step(1)} aria-label="Next slot">
           [ → ]
         </button>
-        <button className="btn" onClick={() => setOdd(!odd)} aria-pressed={odd}>
-          [ {odd ? 'ODD' : 'EVEN'} SLOT ]
-        </button>
+        <span className="ex-readout" aria-live="polite">
+          slot {slot + 1} of {n} · tone set {set}
+        </span>
       </div>
       <figcaption>
-        Two bytes of your text as one slot plays them. Each tone has its own 16 pitches, 400 Hz apart; the four sets interleave
-        100 Hz apart, so no two tones in a slot ever share a pitch. Odd slots move every pitch up 50 Hz.
+        One slot of the frame above, exactly as FAST plays it, starting at the first slot of your text. The arrows step to the
+        header before it and the checksum and repair bytes after it. Faint marks are every pitch the slot's tone set offers; the
+        tall ones are the four it plays.
       </figcaption>
     </figure>
   );
@@ -882,6 +926,10 @@ export function ModesFigure() {
           <span />
         </div>
       </div>
+      <figcaption>
+        b/s is the speed of the message itself, in bits per second, for a 100-byte message: the time also spent on the sync
+        pattern, header, checksum and repair bytes is counted against it.
+      </figcaption>
     </figure>
   );
 }
