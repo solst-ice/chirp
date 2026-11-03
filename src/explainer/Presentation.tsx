@@ -10,11 +10,18 @@ export interface Slide {
 }
 
 const MAX_ZOOM = 3;
+/**
+ * The article's column (76ch plus padding) in px. Not in ch: ch comes from the
+ * zoomed font, whose rounding would make the width, and so the fit, depend on the zoom.
+ */
+const SLIDE_WIDTH = 640;
+/** Below 1 only on desktop-sized windows (not phones, either way up), e.g. a tall slide on a 720p projector. */
+const MIN_ZOOM = 0.75;
 
 /**
- * The article as full-screen slides, one block at a time. Each slide is laid
- * out at the article's own column width, then enlarged with CSS zoom to fill
- * the window (never shrunk: on a phone a tall slide scrolls instead).
+ * The article as slides filling the window, one block at a time. Each slide is laid
+ * out at the article's own column width, then zoomed to fill the window (on a
+ * phone a tall slide scrolls instead of shrinking).
  */
 export default function Presentation({
   slides,
@@ -31,31 +38,70 @@ export default function Presentation({
   const viewRef = useRef<HTMLDivElement>(null);
   const slideRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
+  /** Upper bound for this slide, lowered when a zoom that should fit doesn't. */
+  const cap = useRef(MAX_ZOOM);
+  const floor = useRef(1);
   const last = slides.length - 1;
   const go = (n: number) => onIndex(Math.max(0, Math.min(last, n)));
 
-  // Fit the slide to the window: as large as both dimensions allow. offsetWidth
-  // and offsetHeight ignore the slide's own zoom, so this doesn't feed back on itself.
+  // The article behind keeps still and drops its scrollbar. Before the fit
+  // below, so the fit measures the window without that scrollbar.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.overflow = 'hidden';
+    return () => {
+      root.style.overflow = '';
+    };
+  }, []);
+
+  // Fit the slide to the window: as large as both dimensions allow. A new slide
+  // or a resized window fits from scratch. After that, changes in the slide's
+  // own size (text re-wrapping at the new zoom, a figure being used) can only
+  // lower the zoom: if they could raise it too, a slide whose size depends on
+  // its zoom could flip between two zooms forever.
   useLayoutEffect(() => {
     const view = viewRef.current;
     const slide = slideRef.current;
     if (!view || !slide) return;
-    const fit = () => {
+    const fit = (fresh: boolean) => {
+      if (fresh) cap.current = MAX_ZOOM;
       // The view's content box: clientWidth/Height include its padding.
       const pad = getComputedStyle(view);
       const width = view.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
       const height = view.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
-      const scale = Math.min(width / slide.offsetWidth, height / slide.offsetHeight);
-      const next = Math.max(1, Math.min(MAX_ZOOM, Math.floor(scale * 20) / 20));
-      setZoom((z) => (Math.abs(z - next) < 0.01 ? z : next));
+      // offsetHeight is in the slide's own, unzoomed units. On a phone the slide
+      // stays at 1 (squeezed to fit when narrower) and scrolls instead of shrinking.
+      floor.current = width >= SLIDE_WIDTH && height >= 600 ? MIN_ZOOM : 1;
+      const scale = Math.min(width / SLIDE_WIDTH, height / slide.offsetHeight);
+      const next = Math.max(floor.current, Math.min(cap.current, Math.floor(scale * 20) / 20));
+      setZoom((z) => {
+        const target = fresh ? next : Math.min(z, next);
+        return Math.abs(z - target) < 0.01 ? z : target;
+      });
     };
-    fit();
-    // Figures change height as they're used (typing, stepping), and windows resize.
-    const ro = new ResizeObserver(fit);
+    fit(true);
+    const ro = new ResizeObserver(() => fit(false));
     ro.observe(slide);
-    ro.observe(view);
-    return () => ro.disconnect();
+    // The window, not the view: a scrollbar appearing in the view must not count as a resize.
+    const onResize = () => fit(true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, [index]);
+
+  // Zoom isn't a pure magnification: text is laid out again at the zoomed size
+  // and can wrap onto an extra line. If the zoomed slide overflows, step down
+  // and cap the slide there, so a resize can't push it back up.
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (!view || zoom <= floor.current) return;
+    if (view.scrollHeight > view.clientHeight + 1 || view.scrollWidth > view.clientWidth + 1) {
+      cap.current = Math.max(floor.current, Math.round((zoom - 0.05) * 20) / 20);
+      setZoom(cap.current);
+    }
+  }, [zoom, index]);
 
   // A demo started on one slide stops when you move on.
   useEffect(() => () => stopSound(), [index]);
@@ -77,23 +123,13 @@ export default function Presentation({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // Leaving full screen (the browser's own Esc) also leaves the presentation.
-  const exitRef = useRef(onExit);
-  exitRef.current = onExit;
-  useEffect(() => {
-    rootRef.current?.focus();
-    const onChange = () => {
-      if (!document.fullscreenElement) exitRef.current();
-    };
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
+  useEffect(() => rootRef.current?.focus(), []);
 
   const slide = slides[index];
   return (
     <div className="ex-present" ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="How chirp works, presentation">
       <div className="ex-present-view" ref={viewRef}>
-        <div className="explainer ex-slide" ref={slideRef} style={{ zoom }} key={slide.id}>
+        <div className="explainer ex-slide" ref={slideRef} style={{ zoom, width: SLIDE_WIDTH }} key={slide.id}>
           <SlideZoom.Provider value={zoom}>{slide.content}</SlideZoom.Provider>
         </div>
       </div>

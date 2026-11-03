@@ -55,9 +55,8 @@
   padding: max(8px, env(safe-area-inset-top)) 2ch 0;
 }
 
-/* The article's column (76ch plus padding), enlarged by Presentation's zoom. */
+/* Width set by Presentation; squeezed to fit on phones. */
 .explainer.ex-slide {
-  width: 80ch;
   max-width: 100%;
   margin: auto;
   border: none;

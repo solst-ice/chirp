@@ -371,12 +371,9 @@ export default function Explainer() {
   const present = () => {
     setSlide(0);
     setPresenting(true);
-    // Not everywhere (iPhone Safari); the slides fill the window either way.
-    void document.documentElement.requestFullscreen?.().catch(() => undefined);
   };
   const returnTo = useRef<string | null>(null);
   const exit = () => {
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     returnTo.current = blocks[slide].id;
     setPresenting(false);
   };
