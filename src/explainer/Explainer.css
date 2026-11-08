@@ -591,6 +591,137 @@
   color: var(--dim);
 }
 
+/* Guessing a key: bars on a log scale of time, with reference marks */
+.ex-guess {
+  grid-template-columns: 15ch minmax(0, 1fr);
+}
+
+.ex-marks {
+  position: relative;
+  height: var(--cell);
+  color: var(--dim);
+}
+
+.ex-marks > span {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.ex-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--fg);
+}
+
+.ex-band-err {
+  background: var(--err);
+}
+
+.ex-band-warn {
+  background: var(--warn);
+}
+
+.ex-band-tx {
+  background: var(--tx);
+}
+
+/* Sealing a frame: the bytes inside and on air, coloured by part */
+.ex-input-key {
+  margin-top: 4px;
+}
+
+.ex-seal-row {
+  display: grid;
+  grid-template-columns: 13ch minmax(0, 1fr);
+  gap: 1ch;
+  margin-top: 8px;
+}
+
+.ex-seal-bytes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1ch;
+  min-width: 0;
+}
+
+.ex-seal-part {
+  display: contents;
+}
+
+.explainer .ex-seal-arrow {
+  margin-top: 4px;
+}
+
+.ex-seal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 2ch;
+}
+
+.seal-type,
+.seal-time {
+  color: var(--fg);
+}
+
+.seal-text {
+  color: var(--rx);
+}
+
+.seal-version {
+  color: var(--dim);
+}
+
+.seal-nonce {
+  color: var(--warn);
+}
+
+.seal-cipher {
+  color: var(--accent);
+}
+
+.seal-tag {
+  color: var(--tx);
+}
+
+/* The receiver's checks */
+.ex-gates {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ex-gates li {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  padding: 2px 0;
+}
+
+.ex-gate-name {
+  color: var(--fg);
+}
+
+.gate-pass {
+  color: var(--tx);
+}
+
+.gate-stop {
+  color: var(--err);
+}
+
+.gate-stop .ex-gate-name {
+  color: var(--err);
+}
+
+.gate-skip {
+  color: var(--dim);
+  opacity: 0.6;
+}
+
+.gate-skip .ex-gate-name {
+  color: inherit;
+}
+
 /* Comparison */
 .ex-compare {
   width: 100%;
@@ -636,6 +767,15 @@
 
   .ex-mode > .dim {
     grid-column: 1;
+  }
+
+  .ex-guess {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ex-seal-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 

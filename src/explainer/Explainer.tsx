@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ENCRYPTION_OVERHEAD, PBKDF2_ITERATIONS } from '../modem/encryption';
 import { getModem } from '../modem/profiles';
 import { V1 } from './dsp';
 import {
@@ -9,9 +10,12 @@ import {
   FftFigure,
   FilesFigure,
   FrameFigure,
+  GatesFigure,
+  GuessFigure,
   ModesFigure,
   NibbleFigure,
   PitchFigure,
+  SealFigure,
   SyncFigure,
   ToneFigure,
   V1Figure,
@@ -52,6 +56,7 @@ interface Block {
 }
 
 const FIXES_HEADING = '5 · Version 2, one fix at a time';
+const ENCRYPTION_HEADING = '7 · Encryption';
 
 export default function Explainer() {
   const [demo, setDemo] = useState('Hi ✓');
@@ -295,7 +300,8 @@ export default function Explainer() {
           <p>
             FAST uses the most tones. ROBUST uses fewer tones and longer slots for noisy, echoey rooms. INAUDIBLE sits at 18–19
             kHz, above what most adults hear, with one tone at a time, because two high tones together can produce an audible
-            buzz in small speakers. The receiver listens for all three at once.
+            buzz in small speakers. The receiver listens for all three at once. A fourth choice, ENCRYPTED, plays FAST's
+            tones; section 7 explains it.
           </p>
           <ModesFigure />
         </>
@@ -349,8 +355,84 @@ export default function Explainer() {
       ),
     },
     {
+      id: 'encryption',
+      title: ENCRYPTION_HEADING,
+      body: (
+        <p>
+          Sound is a broadcast: everyone in earshot hears every message, and anyone can send one. ENCRYPTED mode keeps FAST's
+          tones but seals each frame first, so only a device with the same key, agreed in advance, can read it, or send a frame
+          it will accept. The sync, header and repair bytes work as before: encryption sits on top of the modem, not inside it.
+        </p>
+      ),
+    },
+    {
+      id: 'key',
+      title: 'From a passphrase to a key',
+      kind: 'detail',
+      kicker: ENCRYPTION_HEADING,
+      body: (
+        <>
+          <p>
+            Both devices type the same passphrase. <em>PBKDF2</em> hashes it {PBKDF2_ITERATIONS.toLocaleString('en-US')} times
+            into a 256-bit key; the key itself never goes on air. That takes a moment, once per passphrase. It matters because
+            anyone who records a transmission can try passphrases offline for as long as they like, and every guess costs them
+            the same {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds. What's left to protect you is how many passphrases
+            they might have to try.
+          </p>
+          <GuessFigure />
+        </>
+      ),
+    },
+    {
+      id: 'seal',
+      title: 'Sealing a frame',
+      kind: 'detail',
+      kicker: ENCRYPTION_HEADING,
+      body: (
+        <>
+          <p>
+            Each frame is sealed on its own with <em>AES-256-GCM</em>, so file chunks can still arrive in any order. The inside
+            holds the frame's real type, the time it was sent, and the data. Around it go:
+          </p>
+          <ul className="ex-list ex-points">
+            <li>
+              <em>a nonce:</em> 12 random bytes, new for every frame, so the same text never sounds the same twice;
+            </li>
+            <li>
+              <em>the ciphertext:</em> the inside, scrambled with the key and the nonce, byte for byte the same length;
+            </li>
+            <li>
+              <em>a tag:</em> 16 bytes computed from the key and every other byte. Change anything, or open it with another key,
+              and it no longer matches.
+            </li>
+          </ul>
+          <p>
+            {ENCRYPTION_OVERHEAD} bytes in all, about {(v2Seconds(100 + ENCRYPTION_OVERHEAD) - v2Seconds(100)).toFixed(1)} s more
+            sound for a 100-byte message in FAST. The text here is the same as in section 5.
+          </p>
+          <SealFigure value={demo} onChange={setDemo} />
+        </>
+      ),
+    },
+    {
+      id: 'open',
+      title: 'Opening it',
+      kind: 'detail',
+      kicker: ENCRYPTION_HEADING,
+      body: (
+        <>
+          <p>The receiver runs four checks in order, and shows a frame only if it passes all of them.</p>
+          <GatesFigure />
+          <p>
+            What it can't hide: that something was sent, when, for how long, and in which mode. Anyone with the passphrase can
+            read every message and send ones that look genuine, and a passphrase that leaks later opens old recordings too.
+          </p>
+        </>
+      ),
+    },
+    {
       id: 'using',
-      title: '7 · Using it',
+      title: '8 · Using it',
       body: (
         <ul className="ex-list ex-points">
           <li>
@@ -371,8 +453,13 @@ export default function Explainer() {
             dogs and cats can hear it, and it may bother them.
           </li>
           <li>
-            Treat every message as public. Anyone within earshot running chirp receives it, nothing is encrypted, and the
-            checksum shows that the data arrived intact, not who sent it.
+            Treat every message as public unless it was sent in ENCRYPTED. Anyone within earshot running chirp receives it, and
+            the checksum shows that the data arrived intact, not who sent it.
+          </li>
+          <li>
+            For private messages, pick ENCRYPTED, press GENERATE, and read the key out to the other person face to face, never
+            over chirp. Enter it on both devices before sending: frames heard without the key are lost, and have to be sent
+            again.
           </li>
         </ul>
       ),

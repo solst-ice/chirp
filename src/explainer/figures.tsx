@@ -3,7 +3,18 @@
 // The sync and error-correction figures are simplified illustrations of the
 // idea, and say so in their captions.
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ENCRYPTION_OVERHEAD,
+  MAX_AGE_S,
+  MAX_AHEAD_S,
+  PBKDF2_ITERATIONS,
+  decryptFrame,
+  deriveKey,
+  encryptFrame,
+  generateKey,
+} from '../modem/encryption';
+import { FrameType } from '../modem/types';
 import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, binOf, toneFrequency } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import Canvas, { type Draw } from './Canvas';
@@ -929,6 +940,299 @@ export function ModesFigure() {
       <figcaption>
         b/s is the speed of the message itself, in bits per second, for a 100-byte message: the time also spent on the sync
         pattern, header, checksum and repair bytes is counted against it.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 7a · how long guessing takes ────────────────────── */
+
+// Roughly one of today's fastest graphics cards against PBKDF2-SHA256 at 600,000 rounds.
+const GUESSES_PER_SECOND = 15_000;
+const YEAR_S = 365.25 * 86400;
+const UNIVERSE_S = 13.8e9 * YEAR_S;
+const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+
+/** A duration in words, rounded to what matters at that scale. */
+function duration(s: number): string {
+  // Two significant figures past 100: the guessing rate is only a rough figure.
+  const round = (n: number, unit: string) => {
+    const r = n < 100 ? Math.round(n) : Number(n.toPrecision(2));
+    return `${r.toLocaleString('en-US')} ${unit}${r === 1 ? '' : 's'}`;
+  };
+  if (s < 60) return round(s, 'second');
+  if (s < 3600) return round(s / 60, 'minute');
+  if (s < 86400) return round(s / 3600, 'hour');
+  if (s < YEAR_S) return round(s / 86400, 'day');
+  const y = s / YEAR_S;
+  if (y < 1e6) return round(y, 'year');
+  if (y < 1e9) return `${Math.round(y / 1e6)} million years`;
+  if (y < 1e12) return `${Math.round(y / 1e9)} billion years`;
+  const exponent = Math.floor(Math.log10(y));
+  return `10${Array.from(String(exponent), (d) => SUPERSCRIPT[Number(d)]).join('')} years`;
+}
+
+const GUESS_ROWS: { name: string; note: string; keys: number; rate: number; tone: string }[] = [
+  { name: 'a known phrase', note: 'a lyric, quote or saying: one of maybe a billion', keys: 1e9, rate: GUESSES_PER_SECOND, tone: 'err' },
+  {
+    name: '5 random words',
+    note: `from a 7,776-word list, but hashed once instead of ${PBKDF2_ITERATIONS.toLocaleString('en-US')} times`,
+    keys: 7776 ** 5,
+    rate: GUESSES_PER_SECOND * PBKDF2_ITERATIONS,
+    tone: 'warn',
+  },
+  { name: '5 random words', note: 'from a 7,776-word list', keys: 7776 ** 5, rate: GUESSES_PER_SECOND, tone: 'rx' },
+  { name: 'GENERATE', note: '25 random characters', keys: 32 ** 25, rate: GUESSES_PER_SECOND, tone: 'tx' },
+];
+// On average the right key turns up halfway through.
+const guessSeconds = (row: (typeof GUESS_ROWS)[number]) => row.keys / 2 / row.rate;
+const GUESS_MAX_LOG = Math.ceil(Math.max(...GUESS_ROWS.map((r) => Math.log10(guessSeconds(r)))));
+const logPosition = (s: number) => `${(Math.max(0, Math.log10(s)) / GUESS_MAX_LOG) * 100}%`;
+const GUESS_MARKS = [
+  { label: '1 year', s: YEAR_S },
+  { label: "universe's age", s: UNIVERSE_S },
+];
+
+export function GuessFigure() {
+  const phrase = guessSeconds(GUESS_ROWS[0]);
+  const words = guessSeconds(GUESS_ROWS[2]);
+  return (
+    <figure className="ex-figure">
+      <div className="ex-modes ex-guess">
+        <div className="ex-mode">
+          <span />
+          <span className="ex-marks" aria-hidden="true">
+            {GUESS_MARKS.map((m) => (
+              <span key={m.label} style={{ left: logPosition(m.s) }}>
+                {m.label}
+              </span>
+            ))}
+          </span>
+        </div>
+        {GUESS_ROWS.map((row, i) => (
+          <div className="ex-mode" key={i}>
+            <span className={`ex-mode-name ${row.tone}`}>{row.name}</span>
+            <span className="ex-track">
+              <span className={`ex-band ex-band-${row.tone}`} style={{ left: 0, width: logPosition(guessSeconds(row)) }} />
+              {GUESS_MARKS.map((m) => (
+                <span key={m.label} className="ex-mark" style={{ left: logPosition(m.s) }} />
+              ))}
+            </span>
+            <span className="dim">
+              {row.note} · <span className="ex-mode-range">~{duration(guessSeconds(row))}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <figcaption>
+        How long someone with a recording would take, on average, to find the key, trying about{' '}
+        {GUESSES_PER_SECOND.toLocaleString('en-US')} passphrases a second: roughly one of today's fastest graphics cards. Each step
+        along the bars is ten times longer. A thousand cards divide every time by a thousand: the phrase then falls in about{' '}
+        {duration(phrase / 1000)}, while the random words still take {duration(words / 1000)}.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 7b · sealing a frame ────────────────────────────── */
+
+type SealPart = 'type' | 'time' | 'text' | 'version' | 'nonce' | 'cipher' | 'tag';
+const SEAL_LABELS: Record<SealPart, string> = {
+  type: 'type',
+  time: 'time',
+  text: 'your text',
+  version: 'version',
+  nonce: 'nonce',
+  cipher: 'ciphertext',
+  tag: 'tag',
+};
+
+type Sealed =
+  | { inside: [SealPart, Uint8Array][]; outside: [SealPart, Uint8Array][]; opened: string; flippedOpens: boolean }
+  | { error: string };
+
+function SealRow({ label, parts }: { label: string; parts: [SealPart, Uint8Array][] }) {
+  return (
+    <div className="ex-seal-row">
+      <span className="dim">{label}</span>
+      <span className="ex-seal-bytes">
+        {parts.map(([part, bytes]) => (
+          <span key={part} className={`ex-seal-part seal-${part}`} title={SEAL_LABELS[part]}>
+            {Array.from(bytes, (b, i) => (
+              <span key={i}>{b.toString(16).padStart(2, '0')}</span>
+            ))}
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+export function SealFigure({ value, onChange }: { value: string; onChange: (s: string) => void }) {
+  const [key, setKey] = useState(generateKey);
+  const [nonce, setNonce] = useState(() => crypto.getRandomValues(new Uint8Array(12)));
+  const [flip, setFlip] = useState(false);
+  const [sealed, setSealed] = useState<Sealed | null>(null);
+
+  // The app's own code: PBKDF2 (slow by design, so a pause in typing first), then AES-256-GCM.
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(async () => {
+      try {
+        const k = await deriveKey(key);
+        const now = Date.now();
+        const frame = await encryptFrame(k, { type: FrameType.Text, payload: enc.encode(value) }, { nonce, now });
+        const opened = await decryptFrame(k, frame.payload, { now });
+        if (!opened.ok) throw new Error('could not open its own frame');
+        const altered = frame.payload.slice();
+        // One bit of the ciphertext: of the first text byte if there is one.
+        altered[13 + (value ? 5 : 0)] ^= 1;
+        const flippedOpens = (await decryptFrame(k, altered, { now })).ok;
+        const time = new Uint8Array(4);
+        new DataView(time.buffer).setUint32(0, opened.sentAt);
+        const p = frame.payload;
+        if (!live) return;
+        setSealed({
+          inside: [
+            ['type', Uint8Array.of(opened.frame.type)],
+            ['time', time],
+            ['text', opened.frame.payload],
+          ],
+          outside: [
+            ['version', p.subarray(0, 1)],
+            ['nonce', p.subarray(1, 13)],
+            ['cipher', (flip ? altered : p).subarray(13, p.length - 16)],
+            ['tag', p.subarray(p.length - 16)],
+          ],
+          opened: new TextDecoder().decode(opened.frame.payload),
+          flippedOpens,
+        });
+      } catch (err) {
+        if (live) setSealed({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [key, value, nonce, flip]);
+
+  const textBytes = enc.encode(value).length;
+  return (
+    <figure className="ex-figure">
+      <label className="ex-input">
+        <span aria-hidden="true">&gt;</span>
+        <input value={value} spellCheck={false} aria-label="Text to seal" onChange={(e) => onChange(fitDemo(e.target.value))} />
+      </label>
+      <label className="ex-input ex-input-key">
+        <span aria-hidden="true">#</span>
+        <input value={key} spellCheck={false} autoCapitalize="none" aria-label="Pre-shared key" onChange={(e) => setKey(e.target.value)} />
+      </label>
+      {sealed && 'error' in sealed ? (
+        <p className="ex-verdict err">{sealed.error}</p>
+      ) : (
+        sealed && (
+          <>
+            <SealRow label="inside: only key holders" parts={sealed.inside} />
+            <p className="ex-seal-arrow dim">↓ AES-256-GCM with the key, and a fresh nonce</p>
+            <SealRow label="on air: everyone hears" parts={sealed.outside} />
+            <p className="ex-seal-legend">
+              {(['version', 'nonce', 'cipher', 'tag'] as const).map((part) => (
+                <span key={part} className={`seal-${part}`}>
+                  ■ {SEAL_LABELS[part]}
+                </span>
+              ))}
+            </p>
+            <div className="ex-controls">
+              <button className="btn" onClick={() => setNonce(crypto.getRandomValues(new Uint8Array(12)))}>
+                [ ↻ SEAL AGAIN ]
+              </button>
+              <button className="btn" aria-pressed={flip} onClick={() => setFlip((f) => !f)}>
+                [ {flip ? '✓ UNDO THE FLIP' : '⚡ FLIP ONE BIT'} ]
+              </button>
+            </div>
+            <p className={`ex-verdict ${flip && !sealed.flippedOpens ? 'err' : 'ok'}`} role="status">
+              {flip
+                ? sealed.flippedOpens
+                  ? 'the flipped frame still opened (this should never happen)'
+                  : '✗ refused: one bit changed, so the tag no longer matches'
+                : `✓ opens with this key: "${sealed.opened}"`}
+            </p>
+          </>
+        )
+      )}
+      <figcaption>
+        Computed in your browser by the app's own code. {textBytes} bytes of text go out as {textBytes + ENCRYPTION_OVERHEAD}. SEAL
+        AGAIN picks a new nonce, and every byte after it changes. Change one character of the key, or flip one bit on the way,
+        and the frame no longer opens.
+      </figcaption>
+    </figure>
+  );
+}
+
+/* ── 7c · the receiver's checks ──────────────────────── */
+
+const GATES = [
+  { name: 'Reed–Solomon and CRC-32', test: 'did the bytes arrive intact?' },
+  { name: 'the tag', test: 'sealed with this key, and not altered since?' },
+  { name: 'the time', test: `sent at most ${MAX_AGE_S / 60} minutes ago, and at most ${MAX_AHEAD_S / 60} minutes ahead?` },
+  { name: 'the nonce', test: 'not opened already?' },
+];
+
+const SCENARIOS: { label: string; stop: number | null; outcome: string }[] = [
+  { label: 'GENUINE', stop: null, outcome: 'opened, and shown as decrypted' },
+  { label: 'NOISE', stop: 0, outcome: 'too damaged to repair: marked corrupted' },
+  { label: 'WRONG KEY', stop: 1, outcome: 'refused: wrong key, or the frame was altered' },
+  {
+    label: 'ALTERED',
+    stop: 1,
+    outcome: 'refused: anyone can fix up a CRC, so the edit passes the first check, but only the key makes a matching tag',
+  },
+  { label: 'REPLAYED TOMORROW', stop: 2, outcome: 'refused: sent too long ago' },
+  { label: 'REPLAYED AT ONCE', stop: 3, outcome: 'ignored: this frame was already opened' },
+];
+
+export function GatesFigure() {
+  const ref = useRef<HTMLElement>(null);
+  const visible = useVisible(ref);
+  const reduced = useReducedMotion();
+  // Cycles on its own until the reader picks a scenario.
+  const [manual, setManual] = useState<number | null>(null);
+  const tick = useTicker(2600, visible && !reduced && manual === null);
+  const index = manual ?? tick % SCENARIOS.length;
+  const scenario = SCENARIOS[index];
+  return (
+    <figure className="ex-figure" ref={ref}>
+      <div className="ex-controls ex-scenarios">
+        {SCENARIOS.map((s, i) => (
+          <button key={s.label} className={`btn${i === index ? ' btn-primary' : ''}`} aria-pressed={i === index} onClick={() => setManual(i)}>
+            [ {s.label} ]
+          </button>
+        ))}
+      </div>
+      <ol className="ex-gates">
+        {GATES.map((g, i) => {
+          const state = scenario.stop === null || i < scenario.stop ? 'pass' : i === scenario.stop ? 'stop' : 'skip';
+          return (
+            <li key={g.name} className={`gate-${state}`}>
+              <span aria-hidden="true">{state === 'pass' ? '✓' : state === 'stop' ? '✗' : '·'}</span>
+              <span>
+                <span className="ex-gate-name">{g.name}</span> · {g.test}
+                <span className="sr-only">{state === 'pass' ? ' passed' : state === 'stop' ? ' failed' : ' not reached'}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <SteadyText
+        className={`ex-verdict ${scenario.stop === null ? 'ok' : 'err'}`}
+        texts={SCENARIOS.map((s) => `${s.stop === null ? '✓' : '✗'} ${s.outcome}`)}
+        index={index}
+        live={manual !== null}
+      />
+      <figcaption>
+        The order matters. Error correction comes first, so the cipher only ever sees bytes that arrived intact. The CRC catches
+        accidents; the tag catches people.
       </figcaption>
     </figure>
   );
