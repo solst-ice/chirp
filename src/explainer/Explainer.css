@@ -794,3 +794,297 @@
     transition: none;
   }
 }
+
+/* ── 8 · two-way sessions ──────────────────────────── */
+
+/* Kept in the layout while not yet shown, so a stepped figure keeps its height. */
+.ex-unshown {
+  visibility: hidden;
+}
+
+.ex-secret {
+  color: var(--accent);
+}
+
+.ex-public {
+  color: var(--rx);
+}
+
+.ex-gone {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Paint: rows of pots, A | on air | B */
+.ex-paint {
+  display: grid;
+  grid-template-columns: 7ch repeat(3, minmax(0, 1fr));
+  gap: 8px 1ch;
+  align-items: start;
+}
+
+.ex-paint-head {
+  color: var(--dim);
+  text-align: center;
+}
+
+.ex-paint-row {
+  align-self: center;
+}
+
+.ex-paint-none {
+  align-self: center;
+  text-align: center;
+}
+
+.ex-paint-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1ch;
+}
+
+.ex-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  transition: opacity 0.4s;
+}
+
+.ex-swatch.ex-unshown {
+  opacity: 0;
+}
+
+.ex-pot {
+  width: 100%;
+  max-width: 10ch;
+  height: 24px;
+  border: 1px solid var(--line);
+}
+
+.ex-chips {
+  display: flex;
+  gap: 2px;
+}
+
+.ex-chips > span {
+  width: 8px;
+  height: 8px;
+}
+
+.ex-swatch-label {
+  color: var(--dim);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.ex-swatch-label.ok {
+  color: var(--tx);
+}
+
+.ex-swatch-label.err {
+  color: var(--err);
+}
+
+/* A mix travelling across the air, from its sender's side. */
+.ex-from-left {
+  animation: ex-arrive-left 0.8s ease-out;
+}
+
+.ex-from-right {
+  animation: ex-arrive-right 0.8s ease-out;
+}
+
+@keyframes ex-arrive-left {
+  from {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+}
+
+@keyframes ex-arrive-right {
+  from {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+}
+
+/* Where the passphrase comes in: two ingredients, and who has them */
+.ex-mix {
+  margin-top: 8px;
+}
+
+.ex-mix-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 1ch;
+  margin-top: 4px;
+}
+
+.ex-mix-op {
+  color: var(--dim);
+}
+
+.explainer .ex-mix-join {
+  margin: 4px 0 0;
+}
+
+.ex-ingredient {
+  padding: 0 0.5ch;
+  border: 1px solid var(--line);
+  transition:
+    color 0.3s,
+    border-color 0.3s;
+}
+
+.ex-ingredient.have {
+  border-color: var(--tx);
+  color: var(--tx);
+}
+
+.ex-ingredient.lack {
+  border-style: dashed;
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.ex-ingredient.public {
+  border-color: var(--rx);
+  color: var(--rx);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-ingredient {
+    transition: none;
+  }
+}
+
+/* Handshake: a sequence of turns, A on the left, B on the right */
+.ex-seq-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+}
+
+.ex-seq {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ex-seq-row {
+  position: relative;
+  padding: 2px 1ch;
+  border-left: 2px solid transparent;
+}
+
+.ex-seq-row.current {
+  background: var(--sel);
+  border-left-color: var(--accent);
+}
+
+.ex-seq-row.side-a {
+  padding-right: 20%;
+}
+
+.ex-seq-row.side-b {
+  padding-left: 20%;
+  text-align: right;
+}
+
+.ex-seq-row.side-right,
+.ex-seq-row.side-left,
+.ex-seq-row.side-both {
+  text-align: center;
+  color: var(--warn);
+}
+
+.ex-seq-row.side-listener {
+  margin-top: 4px;
+  color: var(--dim);
+}
+
+/* The wire under a frame on air, with a dot travelling along it while it is the current step. */
+.ex-wire {
+  position: relative;
+  display: block;
+  height: 0;
+  margin: 6px 10% 4px;
+  border-top: 1px dashed var(--line);
+}
+
+.ex-wire.moving::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  width: 7px;
+  height: 7px;
+  background: var(--warn);
+  animation: 1.4s ease-in-out infinite;
+}
+
+.ex-wire.to-right.moving::after {
+  animation-name: ex-wire-right;
+}
+
+.ex-wire.to-left.moving::after {
+  animation-name: ex-wire-left;
+}
+
+@keyframes ex-wire-right {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 7px);
+  }
+}
+
+@keyframes ex-wire-left {
+  from {
+    left: calc(100% - 7px);
+  }
+  to {
+    left: 0;
+  }
+}
+
+.ex-leak th[scope='row'] {
+  width: 40%;
+}
+
+.ex-leak td:last-child:not(.ok) {
+  color: inherit;
+}
+
+@media (max-width: 760px) {
+  .ex-paint {
+    grid-template-columns: 5ch repeat(3, minmax(0, 1fr));
+  }
+
+  .ex-seq-row.side-a {
+    padding-right: 1ch;
+  }
+
+  .ex-seq-row.side-b {
+    padding-left: 1ch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-from-left,
+  .ex-from-right,
+  .ex-wire.moving::after {
+    animation: none;
+  }
+
+  .ex-wire.moving::after {
+    display: none;
+  }
+
+  .ex-swatch {
+    transition: none;
+  }
+}

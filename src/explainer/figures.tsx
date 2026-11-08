@@ -64,7 +64,7 @@ const hz = (f: number) => Math.round(f).toLocaleString('en-US');
  * steps through captions of different lengths keeps its height, so the page
  * below it doesn't move. Screen readers get only the current text.
  */
-function SteadyText({ texts, index, className = '', live = false }: { texts: string[]; index: number; className?: string; live?: boolean }) {
+export function SteadyText({ texts, index, className = '', live = false }: { texts: string[]; index: number; className?: string; live?: boolean }) {
   return (
     <p className={`ex-steady ${className}`}>
       {texts.map((t, i) => (

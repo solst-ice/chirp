@@ -21,6 +21,7 @@ import {
   V1Figure,
   V1TableFigure,
 } from './figures';
+import { HandshakeFigure, LeakFigure, MixFigure, PaintFigure } from './dhFigures';
 import Presentation, { type Slide } from './Presentation';
 import { playV1, playV2, stopSound } from './sound';
 import './Explainer.css';
@@ -57,6 +58,7 @@ interface Block {
 
 const FIXES_HEADING = '5 · Version 2, one fix at a time';
 const ENCRYPTION_HEADING = '7 · Encryption';
+const TWO_WAY_HEADING = '8 · Two-way: a key that never goes on air';
 
 export default function Explainer() {
   const [demo, setDemo] = useState('Hi ✓');
@@ -426,13 +428,150 @@ export default function Explainer() {
           <p>
             What it can't hide: that something was sent, when, for how long, and in which mode. Anyone with the passphrase can
             read every message and send ones that look genuine, and a passphrase that leaks later opens old recordings too.
+            Section 8 is about that last one.
           </p>
         </>
       ),
     },
     {
+      id: 'two-way',
+      title: TWO_WAY_HEADING,
+      body: (
+        <>
+          <p>
+            Section 7 has one weak spot. Every message, today's and next year's, is locked with the same key, made from the
+            passphrase. Anyone can keep a recording, and if the passphrase ever leaks, every recording opens.
+          </p>
+          <p>
+            TWO-WAY fixes that. Before the first message, the two devices agree on a fresh key, out loud, in front of anyone
+            listening, in a way that leaves the listener unable to work it out. Then both throw away what they used to make it.
+            The trick is called <em>Diffie–Hellman key exchange</em>, after Whitfield Diffie and Martin Hellman, who published
+            it in 1976.
+          </p>
+          <p>
+            It doesn't replace the passphrase. Both devices still need the same one, and it still does a job of its own: the
+            fresh key is made from the exchange and the passphrase together.
+          </p>
+          <p>
+            The price is that both devices have to talk: the receiver needs a working speaker as well as a microphone, and the
+            sender needs a microphone to hear the answer.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'paint',
+      title: 'Mixing paint',
+      kind: 'detail',
+      kicker: TWO_WAY_HEADING,
+      body: (
+        <>
+          <p>
+            The usual way to picture it uses paint. Mixing two colours is easy; looking at a mix and saying exactly what went
+            into it is not. That one-way step is all Diffie–Hellman needs.
+          </p>
+          <PaintFigure />
+          <p>
+            Both devices end up with the same colour, made from the common colour and both secrets, yet neither secret ever left
+            its device. The listener heard every mix but never a secret, and without one it can't make the final colour.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'scale',
+      title: "Why a listener can't unmix it",
+      kind: 'detail',
+      kicker: TWO_WAY_HEADING,
+      body: (
+        <p>
+          Real Diffie–Hellman mixes numbers, not paint. chirp uses <em>X25519</em>, where each secret and each public half is
+          a 32-byte number, about 77 digits long. Making the public half from a secret, or the shared secret from a secret and
+          the other public half, takes a device a moment. Going back from a public half to its secret is the unmixing, and the
+          best known way takes about 2<sup>126</sup> steps: at a billion billion steps a second, roughly 200 times the age of
+          the universe.
+        </p>
+      ),
+    },
+    {
+      id: 'passphrase',
+      title: 'Where the passphrase comes in',
+      kind: 'detail',
+      kicker: TWO_WAY_HEADING,
+      body: (
+        <>
+          <p>
+            PBKDF2 still turns the passphrase into a key, exactly as in section 7. What changes is what that key does. Without
+            TWO-WAY it seals every frame itself. With TWO-WAY it is one of two ingredients of the session keys; the other is
+            the shared secret from the exchange. Each device stirs the two together (with HMAC, then HKDF) into a key for each
+            direction and a short proof.
+          </p>
+          <MixFigure />
+          <p>
+            Each ingredient stops someone different. The shared secret stops anyone who only listens, even one who learns the
+            passphrase later. The passphrase stops anyone who joins in: Diffie–Hellman on its own makes a secret with whoever
+            answers, so without the passphrase a stranger could answer A's hello and pass for B. With it mixed in, the
+            stranger's keys don't match, its proof fails, and A sends nothing.
+          </p>
+          <p>
+            One detail: the hello carries nothing made from the passphrase. If it did, a recording of the hello alone would be
+            enough to test passphrase guesses offline, the weakness section 7 describes.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'handshake',
+      title: 'How chirp does it',
+      kind: 'detail',
+      kicker: TWO_WAY_HEADING,
+      body: (
+        <>
+          <p>
+            With TWO-WAY on, the first send starts with a <em>handshake</em>. The device sending is A; the one answering is B.
+          </p>
+          <HandshakeFigure />
+          <p>
+            The two devices take turns: each waits a moment after the other stops, because a device ignores its own microphone
+            briefly after playing, so as not to decode its own echo.
+          </p>
+          <p>
+            The session is reused in both directions for 40 minutes; after that, the next send starts a new one. Both screens
+            show the session code. Matching codes mean the same session, though not who is on the other end.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'leak',
+      title: 'What a recording opens later',
+      kind: 'detail',
+      kicker: TWO_WAY_HEADING,
+      body: (
+        <>
+          <LeakFigure />
+          <p>What two-way doesn't fix:</p>
+          <ul className="ex-list">
+            <li>
+              Someone who knows the passphrase and gets between the two devices while they talk, by being louder than one of
+              them or jamming it, can run a handshake with each and read everything.
+            </li>
+            <li>
+              Someone who sends their own hello and gets an answer can then guess passphrases offline, as with a recording in
+              section 7. A generated key still matters.
+            </li>
+            <li>
+              A recording, the passphrase and a large enough quantum computer, if one is ever built, could open it: X25519 isn't
+              designed to resist one.
+            </li>
+            <li>As before, that something was sent, when, and for how long, is plain to hear.</li>
+          </ul>
+        </>
+      ),
+    },
+    {
       id: 'using',
-      title: '8 · Using it',
+      title: '9 · Using it',
       body: (
         <ul className="ex-list ex-points">
           <li>
@@ -460,6 +599,10 @@ export default function Explainer() {
             For private messages, pick ENCRYPTED, press GENERATE, and read the key out to the other person face to face, never
             over chirp. Enter it on both devices before sending: frames heard without the key are lost, and have to be sent
             again.
+          </li>
+          <li>
+            For messages that should stay private even if the key leaks later, turn on TWO-WAY on both devices. Both need a
+            working speaker and microphone, and the first send waits for the other device to answer.
           </li>
         </ul>
       ),
