@@ -785,3 +785,17 @@ details > summary:focus-visible {
 .session-code {
   color: var(--rx);
 }
+
+.two-way-about > summary {
+  margin: 4px 0 0;
+}
+
+.two-way-notes {
+  margin: 4px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.two-way-notes li::before {
+  content: '- ';
+}

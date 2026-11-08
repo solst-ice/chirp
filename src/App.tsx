@@ -75,7 +75,7 @@ const MODES: TxMode[] = [
   {
     id: 'encrypted',
     label: ENCRYPTED_LABEL,
-    description: `${ENCRYPTED_CARRIER.label} tones, sealed with a pre-shared key (AES-256-GCM): only a device with the same key can read it or send it`,
+    description: `${ENCRYPTED_CARRIER.label} tones, sealed with an AES-256-GCM key: only a device with the same key can communicate`,
     // The carrier, labelled as this mode so the status bar and spectrum say ENCRYPTED.
     modem: { ...ENCRYPTED_CARRIER, label: ENCRYPTED_LABEL },
     encrypted: true,
@@ -102,8 +102,8 @@ const sessionNote = (reason: Exclude<SessionOpen, { ok: true }>['reason'], twoWa
   if (reason === 'format') return 'unsupported encryption version';
   if (reason === 'replay') return 'already opened · a replayed recording, ignored';
   return twoWay
-    ? 'sealed for a two-way session this device is not in (with another device, or from before a reload or key change) · ask the sender to press NEW SESSION, then send again'
-    : `sealed for a two-way session · select ${ENCRYPTED_LABEL}, turn on TWO-WAY with the same key, then ask the sender to press NEW SESSION and send again`;
+    ? 'not in this session · ask the sender to press NEW SESSION and resend'
+    : 'two-way frame · turn on TWO-WAY, then ask the sender for NEW SESSION and a resend';
 };
 
 type Tag = 'rx' | 'tx' | 'err' | 'warn' | 'sys';
@@ -226,7 +226,7 @@ const unopenedNote = (result: Exclude<OpenResult, { ok: true }>) => {
   if (result.reason === 'key') return 'wrong pre-shared key, or the frame was altered';
   if (result.reason === 'format') return 'unsupported encryption version';
   const off = formatSeconds(Math.abs(result.skew));
-  return `sent ${off} ${result.skew < 0 ? 'ago' : 'in the future'} · a replayed recording, or the two clocks disagree`;
+  return `sent ${off} ${result.skew < 0 ? 'ago' : 'in the future'} · replayed, or clocks disagree`;
 };
 
 const readStoredMode = () => {
@@ -561,7 +561,7 @@ function App() {
     updateLine(entry.lineId, {
       tag: 'warn',
       progress: undefined,
-      note: `incomplete · ${entry.received}/${entry.total ?? '?'} chunks · ${reason} · ask the sender to RESEND`,
+      note: `${entry.received}/${entry.total ?? '?'} chunks · ${reason} · ask the sender to RESEND`,
     });
   };
 
@@ -879,7 +879,7 @@ function App() {
       return;
     }
     if (needsMicForHandshake(twoWay)) {
-      addLine({ tag: 'err', mode: m.label, text, note: 'not sent · two-way has to hear the other device answer · RETRY MIC', action: 'retry-mic' });
+      addLine({ tag: 'err', mode: m.label, text, note: 'not sent · two-way needs the mic · RETRY MIC', action: 'retry-mic' });
       return;
     }
     const lineId = addLine({ tag: 'tx', mode: m.label, text, progress: 0 });
@@ -935,7 +935,7 @@ function App() {
       return;
     }
     if (needsMicForHandshake(twoWay)) {
-      addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · two-way has to hear the other device answer · RETRY MIC', action: 'retry-mic' });
+      addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · two-way needs the mic · RETRY MIC', action: 'retry-mic' });
       return;
     }
     let lineId: number | undefined;
@@ -1039,7 +1039,7 @@ function App() {
         tag: 'warn',
         mode: current.label,
         text: lastFile.file.name,
-        note: `not resent · it was sent encrypted · select ${ENCRYPTED_LABEL} to resend, or use FILE to send it unencrypted`,
+        note: `not resent · it went encrypted · select ${ENCRYPTED_LABEL}, or use FILE to send it plain`,
       });
       return;
     }
@@ -1092,7 +1092,7 @@ function App() {
       updateLine(lineId, {
         tag: 'warn',
         progress: undefined,
-        note: `failed · this device did not hear its own ${heard} · raise the volume, avoid Bluetooth, or try another mode`,
+        note: "failed · couldn't hear itself · raise the volume, avoid Bluetooth, or try another mode",
       });
       announce(`Loopback test failed for ${m.label}`);
     }
@@ -1123,7 +1123,7 @@ function App() {
     addLine({
       tag: 'sys',
       mode: ENCRYPTED_LABEL,
-      text: on ? 'two-way on · the first send starts a session with a handshake · this device answers handshakes' : 'two-way off · sessions ended · one-way sends',
+      text: on ? 'two-way on · this device answers handshakes' : 'two-way off · sessions ended · one-way sends',
     });
   };
 
@@ -1202,7 +1202,7 @@ function App() {
       updateLine(entry.lineId, {
         tag: 'warn',
         progress: undefined,
-        note: `incomplete · ${entry.received}/${entry.total ?? '?'} chunks · ask the sender to RESEND`,
+        note: `${entry.received}/${entry.total ?? '?'} chunks · ask the sender to RESEND`,
       });
     }
   };
@@ -1255,12 +1255,12 @@ function App() {
   const keyMissing = mode.encrypted && keyChars === 0;
   const keyHint =
     keyChars === 0
-      ? 'needed to send · also opens encrypted messages you receive · kept in memory only'
+      ? 'needed to send and to read · kept in memory only'
       : keyGenerated
-        ? 'random key · read it out to the other device and type it there exactly'
+        ? 'random key · type it exactly on the other device'
         : keyChars < MIN_KEY_CHARS
-          ? `${keyChars} chars · too short: a recording lets anyone guess it · use 5+ random words or GENERATE`
-          : `${keyChars} chars · random words or GENERATE, never a phrase · case-sensitive`;
+          ? `${keyChars} chars · too short to resist guessing · use 5+ random words or GENERATE`
+          : `${keyChars} chars · random words · case-sensitive`;
   const maxFrequency = Math.min(20000, sampleRate / 2);
   const audioRunning = audioState === 'running';
 
@@ -1509,41 +1509,40 @@ function App() {
                 </span>
                 <span>TWO-WAY · Diffie–Hellman session keys</span>
               </label>
-              <div id="two-way-meta" className={`tx-meta${twoWay ? '' : ' dim'}`}>
-                {twoWay ? (
-                  <>
-                    <span className="warn">two-way, not one-way:</span> the first send starts a session with a handshake that the other device
-                    answers, so both need TWO-WAY on, the same key, and a working speaker and microphone · recordings stay sealed even if
-                    the key leaks later
-                    {session ? (
-                      <>
-                        <br />
-                        session <span className="session-code">{sessionCode(session.id)}</span> · an identifier: the other screen shows the
-                        same one if you share a session, but that does not prove who you share it with · renews after{' '}
-                        {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
-                        <button
-                          className="log-action"
-                          disabled={txBusy}
-                          title="Use if the other device reloaded or reports a session it is not in: the next send starts a new handshake"
-                          onClick={() => {
-                            sessions.renew();
-                            addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'new session requested', note: 'the next send starts a handshake' });
-                          }}
-                        >
-                          NEW SESSION
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <br />
-                        no session yet · the next send starts one
-                      </>
-                    )}
-                  </>
-                ) : (
-                  'off: one-way, the receiver never answers · on: Diffie–Hellman for forward secrecy, but two-way (both devices send and listen)'
-                )}
-              </div>
+              {twoWay && (
+                <div className="tx-meta">
+                  {session ? (
+                    <>
+                      session <span className="session-code">{sessionCode(session.id)}</span> · renews{' '}
+                      {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                      <button
+                        className="log-action"
+                        disabled={txBusy}
+                        title="Use if the other device reloaded or reports a session it is not in: the next send starts a new handshake"
+                        onClick={() => {
+                          sessions.renew();
+                          addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'new session requested', note: 'the next send starts a handshake' });
+                        }}
+                      >
+                        NEW SESSION
+                      </button>
+                    </>
+                  ) : (
+                    'no session yet · the next send starts one'
+                  )}
+                </div>
+              )}
+              {/* Collapsed by default; the checkbox is described by its contents either way. */}
+              <details className="two-way-about">
+                <summary className="dim">requires a mic on both devices</summary>
+                <ul id="two-way-meta" className="tx-meta two-way-notes">
+                  <li>off: one-way · the receiver never answers</li>
+                  <li>on: the first send starts a session with a handshake the other device answers · both need TWO-WAY, the same key, and a working speaker and mic</li>
+                  <li>recordings stay sealed even if the key leaks later</li>
+                  <li>the session code identifies the session; matching codes do not prove who is on the other end</li>
+                  <li>NEW SESSION: if the other device reloaded, or says it is not in your session</li>
+                </ul>
+              </details>
             </>
           )}
 
@@ -1575,7 +1574,7 @@ function App() {
             />
           </div>
           {firstUse && (
-            <div className="tx-hint">open chirp on a second device and allow its microphone, then send</div>
+            <div className="tx-hint">open chirp on a second device, allow its mic, then send</div>
           )}
           <div className={`tx-meta${overLimit ? ' err' : ''}`}>
             {payloadBytes}/{mode.maxPayload} B

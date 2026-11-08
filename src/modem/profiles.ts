@@ -24,7 +24,7 @@ export const PROFILES: MfskProfile[] = [
     id: 'robust',
     code: 2,
     label: 'ROBUST',
-    description: 'Audible, 2 tones with long symbols for noisy or echoey rooms',
+    description: 'Slower, for noisy or echoey rooms',
     groups: 2,
     alternate: true,
     baseFrequency: 1500,
@@ -42,8 +42,7 @@ export const PROFILES: MfskProfile[] = [
     label: 'INAUDIBLE',
     // One tone at a time: two simultaneous ultrasonic tones can produce an
     // audible difference tone through a small speaker.
-    description:
-      'Near-ultrasonic, one tone at a time. Device-dependent: run TEST first. Not over Bluetooth; some people and most pets can hear it',
+    description: 'Near-ultrasonic · some people and pets hear it',
     groups: 1,
     alternate: true,
     baseFrequency: 18000,

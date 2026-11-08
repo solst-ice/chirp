@@ -328,7 +328,7 @@ export class SessionManager {
       this.check(generation);
       if (outcome) return outcome;
     }
-    throw new Error('no answer to the handshake · is the other device in ENCRYPTED with TWO-WAY on and the same key?');
+    throw new Error('no answer · is TWO-WAY on there, with the same key?');
   }
 
   /** The round's outcome, or null after `ms` without one. Rejects if the job is cancelled. */
@@ -365,7 +365,7 @@ export class SessionManager {
       return Promise.resolve({
         tag: 'warn',
         text: 'two-way handshake heard, not answered',
-        note: 'select ENCRYPTED, turn on TWO-WAY and enter the same key, then the other device sends again',
+        note: 'turn on TWO-WAY (same key) to answer · then ask for a resend',
       });
     }
     const pending = this.pending;
@@ -428,7 +428,7 @@ export class SessionManager {
       }
       if (generation !== this.generation || pending.outcome) return null;
       if (!sameBytes(keys.confirm, confirm)) {
-        return { tag: 'warn', text: 'handshake answer refused', note: 'the other device has a different key, or the answer was altered' };
+        return { tag: 'warn', text: 'handshake answer refused', note: 'different key on the other device, or altered' };
       }
       const now = this.now();
       const session: Session = { id: keys.idHex, idBytes: keys.id, role: 'initiator', send: keys.send, receive: keys.receive, createdAt: now, confirmedAt: now, seen: new Set() };
@@ -443,7 +443,7 @@ export class SessionManager {
       return {
         tag: 'warn',
         text: 'a second device answered our handshake',
-        note: 'two-way sessions are between two devices · if only two are here, someone else may be interfering',
+        note: 'sessions are one-to-one · if only two devices are here, someone may be interfering',
       };
     }
     // An answer to someone else's hello, or a repeat of one we already have.

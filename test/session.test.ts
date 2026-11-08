@@ -126,7 +126,7 @@ describe('two-way sessions', () => {
     const r = room();
     const a = r.add('a');
     r.add('b', 'some other passphrase entirely');
-    await assert.rejects(a.manager.establish(r.say('a'), job()), /no answer to the handshake/);
+    await assert.rejects(a.manager.establish(r.say('a'), job()), /no answer/);
     assert.ok(a.notices.some((n) => n.text === 'handshake answer refused' && /different key/.test(n.note!)));
     assert.equal(a.manager.current(), null);
   });
