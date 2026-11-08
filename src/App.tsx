@@ -51,13 +51,6 @@ const LOCKED_GROUP_MS = 30_000;
 // Derive the key once typing pauses, so sending does not wait on PBKDF2.
 const KEY_WARMUP_MS = 600;
 
-// Typing STARTDEMO on one device sets off a short exchange between two.
-const DEMO_REPLIES: Record<string, string> = {
-  STARTDEMO: 'HELLO! BOSS!',
-  'HELLO! BOSS!': 'WHOAMI',
-  WHOAMI: 'SOLST/ICE',
-};
-
 /**
  * What the MODE selector picks: a modem to carry the frames and whether they
  * are encrypted first. The receiver listens on every modem and recognises
@@ -545,21 +538,14 @@ function App() {
     }
   };
 
-  /**
-   * Show a text frame or hand a file frame to its assembler. `replyVia` is the
-   * mode a demo reply goes out in: plain frames reply on the carrier they came
-   * in on, and decrypted ones never trigger a reply.
-   */
-  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number; replyVia?: string }) => {
+  /** Show a text frame or hand a file frame to its assembler. */
+  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number }) => {
     const note = o.encrypted ? 'decrypted' : undefined;
     if (frame.type === FrameType.Text) {
       const text = decodeText(frame.payload);
       if (o.lineId !== undefined) updateLine(o.lineId, { progress: undefined, text, note });
       else addLine({ tag: 'rx', mode: label, text, note });
       announce(`Received: ${text}`);
-      const reply = DEMO_REPLIES[text.trim().toUpperCase()];
-      const via = o.replyVia;
-      if (reply && via && !o.encrypted) setTimeout(() => sendTextRef.current(reply, false, via), 1300);
     } else {
       const progress = (o.encrypted ? sealedAssemblerRef : assemblerRef).current.accept(frame);
       if (progress) void handleFileProgress(progress, label, o.encrypted);
@@ -656,7 +642,7 @@ function App() {
         }
         setLastRx({ mode: label, marginDb: e.stats.marginDb, corrected: e.stats.correctedBytes });
         if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
-        else deliverFrame(frame, label, { encrypted: false, lineId: reception?.lineId, replyVia: e.modemId });
+        else deliverFrame(frame, label, { encrypted: false, lineId: reception?.lineId });
         break;
       }
 
@@ -746,16 +732,13 @@ function App() {
     addLine({ tag: 'sys', text: 'stopped listening' });
   };
 
-  /** `modeId` overrides the selected mode (automatic replies keep the mode of the message they answer). */
-  const sendText = async (text: string, fromComposer: boolean, modeId?: string): Promise<void> => {
+  const sendText = async (text: string): Promise<void> => {
     if (!text) return;
     if (transmitter.busy) {
-      // Automatic replies wait their turn; typed messages say why nothing happened.
-      if (!fromComposer) setTimeout(() => sendTextRef.current(text, false, modeId), 500);
-      else addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
+      addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
       return;
     }
-    const mode = getMode(modeId ?? modeRef.current);
+    const mode = getMode(modeRef.current);
     const m = mode.modem;
     const passphrase = pskRef.current;
     const payload = new TextEncoder().encode(text);
@@ -768,7 +751,7 @@ function App() {
       return;
     }
     const lineId = addLine({ tag: 'tx', mode: m.label, text, progress: 0 });
-    if (fromComposer) setInputText('');
+    setInputText('');
 
     const outcome = await transmitter.run(
       `message (${m.label})`,
@@ -779,7 +762,7 @@ function App() {
       },
       (s) => updateLine(lineId, { progress: s.progress }),
     );
-    const restoreDraft = () => fromComposer && setInputText((draft) => draft || text);
+    const restoreDraft = () => setInputText((draft) => draft || text);
     switch (outcome.status) {
       case 'sent':
         setLastTx({ mode: m.label, bytes: payload.length, duration: outcome.duration });
@@ -800,8 +783,6 @@ function App() {
         break;
     }
   };
-  const sendTextRef = useRef(sendText);
-  sendTextRef.current = sendText;
 
   const sendFile = async (file: File, reuse?: LastFile) => {
     if (transmitter.busy) {
@@ -1369,7 +1350,7 @@ function App() {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  if (inputText.trim() && !overLimit && !keyMissing) void sendText(inputText, true);
+                  if (inputText.trim() && !overLimit && !keyMissing) void sendText(inputText);
                 } else if (e.key === 'Escape' && !transmitter.busy) {
                   e.currentTarget.blur();
                 }
@@ -1391,7 +1372,7 @@ function App() {
                 [ <span className="key-hint">ESC </span>CANCEL ]
               </button>
             ) : (
-              <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit || keyMissing}>
+              <button className="btn btn-primary" onClick={() => void sendText(inputText)} disabled={!inputText || overLimit || keyMissing}>
                 [ ⏎ SEND ]
               </button>
             )}

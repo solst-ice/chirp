@@ -1,8 +1,8 @@
 // Owns the speaker: one transmission at a time, cancellable, and polite.
 //
 // The lock is taken synchronously when `run` is called, before any file
-// reading or compression, so overlapping requests (double clicks, hotkeys,
-// automatic demo replies) are refused instead of playing on top of each other.
+// reading or compression, so overlapping requests (double clicks, hotkeys)
+// are refused instead of playing on top of each other.
 // Each job carries the modem it was prepared for, so changing the mode while a
 // job is being prepared or played cannot mix modes. Before talking it waits for
 // any frame currently being received to finish (listen before talk).
