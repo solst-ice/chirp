@@ -28,13 +28,11 @@ import { MODEMS, getModem } from './modem/profiles';
 import { REPLY_BYTES, sessionIdOf } from './modem/session';
 import { FrameType, type DemodEvent, type Demodulator, type Frame, type Modem } from './modem/types';
 import { SessionManager, type SessionInfo, type SessionOpen } from './transfer/sessions';
-import { Transmitter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
+import { ECHO_SETTLE_MS, TURNAROUND_MS, Transmitter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
 
 // Audio signal favicon SVG data - base64 encoded for direct use
 const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIGZpbGw9IiMxMzEzMTMiLz4KICA8IS0tIFRocmVlIHNpZ25hbCBiYXJzIHdpdGggc29saWQgY29sb3JzIC0tPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiByeD0iMiIgZmlsbD0iI2ZmNDFiNCIvPiA8IS0tIFBpbmsgLS0+CiAgPHJlY3QgeD0iMjciIHk9IjMwIiB3aWR0aD0iMTAiIGhlaWdodD0iMjIiIHJ4PSIyIiBmaWxsPSIjMDBmZmFhIi8+IDwhLS0gR3JlZW4gLS0+CiAgPHJlY3QgeD0iNDIiIHk9IjE4IiB3aWR0aD0iMTAiIGhlaWdodD0iMzQiIHJ4PSIyIiBmaWxsPSIjMzE4NWZmIi8+IDwhLS0gQmx1ZSAtLT4KPC9zdmc+`;
 
-// After transmitting, ignore the microphone briefly so our own echo is not decoded.
-const ECHO_SETTLE_MS = 150;
 // How long a loopback self-test keeps listening after its frame finishes playing.
 const SELF_TEST_GRACE_MS = 1500;
 // Longest transmission we start; beyond this a transfer is impractical over sound.
@@ -53,9 +51,6 @@ const STATUS_NAME_CHARS = 28;
 const LOCKED_GROUP_MS = 30_000;
 // Derive the key once typing pauses, so sending does not wait on PBKDF2.
 const KEY_WARMUP_MS = 600;
-// A handshake reply waits this long after the hello ends, so the caller has stopped
-// ignoring its own echo (ECHO_SETTLE_MS) before the reply's preamble arrives.
-const REPLY_DELAY_MS = 400;
 
 /**
  * What the MODE selector picks: a modem to carry the frames and whether they
@@ -93,7 +88,10 @@ const ENCRYPTED_MODE = getMode('encrypted');
 
 // How long a caller listens for a handshake reply: the answering device's delay
 // and the reply's airtime, plus room for decoding and a moment of channel wait.
-const REPLY_TIMEOUT_MS = Math.ceil(REPLY_DELAY_MS + ENCRYPTED_CARRIER.airtime(REPLY_BYTES) * 1000 + 2500);
+const REPLY_TIMEOUT_MS = Math.ceil(TURNAROUND_MS + ENCRYPTED_CARRIER.airtime(REPLY_BYTES) * 1000 + 2500);
+// After losing a tie, listen this long before calling again: the winner's turnaround, plus
+// the time it takes to recognise its data frame (preamble and header), plus a margin.
+const YIELD_BACKOFF_MS = TURNAROUND_MS + 1200;
 
 /** A session id as both screens show it, e.g. 3fa9-12c0. */
 const sessionCode = (id: string) => `${id.slice(0, 4)}-${id.slice(4)}`;
@@ -103,8 +101,8 @@ const sessionNote = (reason: Exclude<SessionOpen, { ok: true }>['reason'], twoWa
   if (reason === 'format') return 'unsupported encryption version';
   if (reason === 'replay') return 'already opened · a replayed recording, ignored';
   return twoWay
-    ? 'sealed for a two-way session this device is not in (with another device, or from before a reload or key change) · ask the sender to send again'
-    : `sealed for a two-way session · select ${ENCRYPTED_LABEL}, turn on TWO-WAY with the same key, then ask the sender to send again`;
+    ? 'sealed for a two-way session this device is not in (with another device, or from before a reload or key change) · ask the sender to press NEW SESSION, then send again'
+    : `sealed for a two-way session · select ${ENCRYPTED_LABEL}, turn on TWO-WAY with the same key, then ask the sender to press NEW SESSION and send again`;
 };
 
 type Tag = 'rx' | 'tx' | 'err' | 'warn' | 'sys';
@@ -154,6 +152,8 @@ interface LastFile {
   fileId: number;
   modemId: string;
   keyContext: number;
+  /** Sealed in a two-way session: receivers assemble those apart from PSK-only frames. */
+  twoWay: boolean;
 }
 
 interface LockedLine {
@@ -247,8 +247,15 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.e
 /** Frames that belong to ENCRYPTED mode, whichever carrier they came in on. */
 const sealedType = (type: number) => type === FrameType.Encrypted || type === FrameType.Handshake;
 
-const SEALED_LINE = 'sealed:';
-const fileLineKey = (encrypted: boolean, fileId: number) => `${encrypted ? SEALED_LINE : 'plain:'}${fileId}`;
+/**
+ * How a received frame was protected. Each kind assembles files apart, so a
+ * file is never put together from frames of different protection, and its
+ * row says which it had.
+ */
+type Protection = 'plain' | 'psk' | 'dh';
+const PROTECTION_NOTE: Record<Protection, string | undefined> = { plain: undefined, psk: 'decrypted · PSK only', dh: 'decrypted · two-way' };
+const fileLineKey = (protection: Protection, fileId: number) => `${protection}:${fileId}`;
+const isSealedLine = (key: string) => !key.startsWith('plain:');
 
 const AudioContextClass: typeof AudioContext =
   window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -385,7 +392,11 @@ function App() {
   // Decrypted file frames assemble apart from plain ones, so an unauthenticated
   // frame can never join, rename or complete an encrypted transfer.
   const sealedAssemblerRef = useRef(new FileAssembler());
-  // Keyed by `fileLineKey`: the two assemblers may hold the same file id.
+  // Two-way frames assemble apart from PSK-only ones, so a file never mixes the two; frames of
+  // different sessions may combine (RESEND after a session renews), all being PSK + DH.
+  const sessionAssemblerRef = useRef(new FileAssembler());
+  const assemblerFor = (p: Protection) => (p === 'plain' ? assemblerRef : p === 'psk' ? sealedAssemblerRef : sessionAssemblerRef).current;
+  // Keyed by `fileLineKey`: the assemblers may hold the same file id.
   const fileLinesRef = useRef<Map<string, FileLine>>(new Map());
   const blobUrlsRef = useRef<Set<string>>(new Set());
   const selfTestRef = useRef<SelfTest | null>(null);
@@ -401,6 +412,8 @@ function App() {
   const replayGuardRef = useRef(new ReplayGuard());
   const lockedLineRef = useRef<LockedLine | null>(null);
   const twoWayRef = useRef(false);
+  // When a frame from another device last ended (performance.now), for listen before talk.
+  const lastHeardRef = useRef(-Infinity);
 
   modeRef.current = modeId;
   micRef.current = mic;
@@ -478,6 +491,7 @@ function App() {
       clock: () => audioContextRef.current?.currentTime ?? performance.now() / 1000,
       play: (samples) => play(audioContextRef.current!, samples),
       channelBusy: () => receptionsRef.current.size > 0,
+      quietMs: () => performance.now() - lastHeardRef.current,
       beforeAudio: (monitor) => {
         mutedRef.current = !monitor;
         if (!monitor) abortReceptions('interrupted by our transmission');
@@ -503,8 +517,8 @@ function App() {
         if (transmitter.busy) return false;
         void transmitter
           .run('handshake answer', async () => {
+            // Listen before talk holds it for TURNAROUND_MS after the hello, until the caller listens again.
             await audioForPlayback();
-            await sleep(REPLY_DELAY_MS);
             return { modem: ENCRYPTED_MODE.modem, frames: [frame] };
           })
           .then((outcome) => {
@@ -516,6 +530,8 @@ function App() {
       },
       onChange: setSession,
       replyTimeoutMs: REPLY_TIMEOUT_MS,
+      yieldBackoffMs: YIELD_BACKOFF_MS,
+      retryJitterMs: 1500,
     });
   }
   const sessions = sessionsRef.current;
@@ -545,10 +561,10 @@ function App() {
     });
   };
 
-  const handleFileProgress = async (p: FileProgress, mode: string, encrypted: boolean) => {
-    for (const id of p.evicted ?? []) dropFileLine(fileLineKey(encrypted, id), 'dropped to make room');
+  const handleFileProgress = async (p: FileProgress, mode: string, protection: Protection) => {
+    for (const id of p.evicted ?? []) dropFileLine(fileLineKey(protection, id), 'dropped to make room');
     if (p.alreadyDelivered) return;
-    const key = fileLineKey(encrypted, p.fileId);
+    const key = fileLineKey(protection, p.fileId);
     const name = p.manifest?.name ?? `file #${p.fileId.toString(16)}`;
     let entry = fileLinesRef.current.get(key);
     if (!entry) {
@@ -584,7 +600,7 @@ function App() {
         progress: undefined,
         text: name,
         file: { name, url, size: data.length },
-        note: encrypted ? 'decrypted · checksum ok' : 'checksum ok',
+        note: [PROTECTION_NOTE[protection], 'checksum ok'].filter(Boolean).join(' · '),
       });
       announce(`Received file ${name}, ${formatBytes(data.length)}`);
     } catch (err) {
@@ -594,16 +610,16 @@ function App() {
   };
 
   /** Show a text frame or hand a file frame to its assembler. */
-  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number; note?: string }) => {
-    const note = o.note ?? (o.encrypted ? 'decrypted' : undefined);
+  const deliverFrame = (frame: Frame, label: string, o: { protection: Protection; lineId?: number; note?: string }) => {
+    const note = o.note ?? PROTECTION_NOTE[o.protection];
     if (frame.type === FrameType.Text) {
       const text = decodeText(frame.payload);
       if (o.lineId !== undefined) updateLine(o.lineId, { progress: undefined, text, note });
       else addLine({ tag: 'rx', mode: label, text, note });
       announce(`Received: ${text}`);
     } else {
-      const progress = (o.encrypted ? sealedAssemblerRef : assemblerRef).current.accept(frame);
-      if (progress) void handleFileProgress(progress, label, o.encrypted);
+      const progress = assemblerFor(o.protection).accept(frame);
+      if (progress) void handleFileProgress(progress, label, o.protection);
     }
   };
 
@@ -635,7 +651,7 @@ function App() {
       noteLocked(sessionNote(result.reason, twoWayRef.current));
       return;
     }
-    deliverFrame(result.frame, ENCRYPTED_LABEL, { encrypted: true, note: `decrypted · session ${sessionCode(result.session)}` });
+    deliverFrame(result.frame, ENCRYPTED_LABEL, { protection: 'dh', note: `${PROTECTION_NOTE.dh} · session ${sessionCode(result.session)}` });
   };
 
   const openFrame = async (payload: Uint8Array) => {
@@ -664,7 +680,7 @@ function App() {
       if (result.frame.type === FrameType.Text) addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'replayed encrypted message ignored' });
       return;
     }
-    deliverFrame(result.frame, ENCRYPTED_LABEL, { encrypted: true });
+    deliverFrame(result.frame, ENCRYPTED_LABEL, { protection: 'psk' });
   };
 
   // Reassigned every render so callbacks from the capture node always see current state.
@@ -701,6 +717,7 @@ function App() {
 
       case 'frame': {
         receptionsRef.current.delete(e.modemId);
+        if (e.frame.type !== FrameType.SelfTest) lastHeardRef.current = now;
         setRxState(null);
         bumpStats(e.modemId, (s) => ({ frames: s.frames + 1, corrected: s.corrected + e.stats.correctedBytes }));
         const { frame } = e;
@@ -717,12 +734,13 @@ function App() {
           // Called synchronously: a tie with our own pending hello is settled before anything else plays.
           void sessions.onHandshake(frame.payload).then((notice) => notice && addLine({ ...notice, mode: ENCRYPTED_LABEL }));
         } else if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
-        else deliverFrame(frame, label, { encrypted: false, lineId: reception?.lineId });
+        else deliverFrame(frame, label, { protection: 'plain', lineId: reception?.lineId });
         break;
       }
 
       case 'error':
         receptionsRef.current.delete(e.modemId);
+        lastHeardRef.current = now;
         setRxState(null);
         bumpStats(e.modemId, (s) => ({ errors: s.errors + 1 }));
         if (reception?.lineId !== undefined) {
@@ -831,6 +849,12 @@ function App() {
     return { frames: await Promise.all(frames.map((f) => sessions.seal(s, f))), session: s.id };
   };
 
+  /**
+   * A two-way send with no session must hear the answer: refuse at once, with
+   * RETRY MIC, rather than play hellos for nobody to hear.
+   */
+  const needsMicForHandshake = (twoWay: boolean) => twoWay && micRef.current !== 'live' && !sessions.current();
+
   const sendText = async (text: string): Promise<void> => {
     if (!text) return;
     if (transmitter.busy) {
@@ -850,6 +874,10 @@ function App() {
       addLine({ tag: 'err', mode: m.label, text: 'not sent · enter a pre-shared key first' });
       return;
     }
+    if (needsMicForHandshake(twoWay)) {
+      addLine({ tag: 'err', mode: m.label, text, note: 'not sent · two-way has to hear the other device answer · RETRY MIC', action: 'retry-mic' });
+      return;
+    }
     const lineId = addLine({ tag: 'tx', mode: m.label, text, progress: 0 });
     setInputText('');
     let via = '';
@@ -861,7 +889,7 @@ function App() {
         const frames = [{ type: FrameType.Text, payload }];
         if (!mode.encrypted) return { modem: m, frames };
         const sealed = await seal(frames, { passphrase, twoWay, signal, context, onStatus: (note) => updateLine(lineId, { note }) });
-        if (sealed.session) via = ` · session ${sessionCode(sealed.session)}`;
+        via = sealed.session ? ` · two-way · session ${sessionCode(sealed.session)}` : ' · PSK only';
         return { modem: m, frames: sealed.frames };
       },
       (s) => updateLine(lineId, { progress: s.progress }),
@@ -902,6 +930,10 @@ function App() {
       addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · enter a pre-shared key first' });
       return;
     }
+    if (needsMicForHandshake(twoWay)) {
+      addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · two-way has to hear the other device answer · RETRY MIC', action: 'retry-mic' });
+      return;
+    }
     let lineId: number | undefined;
     let size = '';
 
@@ -916,7 +948,8 @@ function App() {
         const { data, compressed } = await maybeCompress(raw);
         if (signal.aborted) return null;
         // A changed key starts a new transfer: receivers assemble each key's frames apart.
-        const sameContext = reuse && reuse.modemId === mode.id && (!mode.encrypted || reuse.keyContext === keyContext);
+        const sameContext =
+          reuse && reuse.modemId === mode.id && (!mode.encrypted || (reuse.keyContext === keyContext && reuse.twoWay === twoWay));
         const fileId = reuse && sameContext ? reuse.fileId : newFileId();
         const build = (target: { rawBitRate: number; maxPayload: number }) =>
           buildFileFrames({
@@ -946,7 +979,7 @@ function App() {
           return null;
         }
         size = `${formatBytes(raw.length)}${compressed ? ` → ${formatBytes(data.length)} deflated` : ''}`;
-        setLastFile({ file, fileId, modemId: mode.id, keyContext });
+        setLastFile({ file, fileId, modemId: mode.id, keyContext, twoWay });
         const id = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
         lineId = id;
         // Sealed only now, so time spent confirming does not age the timestamps. Every frame is
@@ -959,7 +992,7 @@ function App() {
           context,
           onStatus: (note) => updateLine(id, { note: note ? `${size} · ${note}` : size }),
         });
-        if (sealed.session) size += ` · session ${sessionCode(sealed.session)}`;
+        size += sealed.session ? ` · two-way · session ${sessionCode(sealed.session)}` : ' · PSK only';
         if (signal.aborted) return null;
         return { modem: m, frames: sealed.frames };
       },
@@ -1071,7 +1104,8 @@ function App() {
     keyContextRef.current++;
     // Unfinished encrypted transfers belonged to the old key; their frames can't be combined with the new key's.
     sealedAssemblerRef.current = new FileAssembler();
-    for (const key of [...fileLinesRef.current.keys()]) if (key.startsWith(SEALED_LINE)) dropFileLine(key, 'key changed');
+    sessionAssemblerRef.current = new FileAssembler();
+    for (const key of [...fileLinesRef.current.keys()]) if (isSealedLine(key)) dropFileLine(key, 'key changed');
     // Two-way sessions were mixed with the old key: end them, and their keys with them.
     sessions.reset();
     if (!normalized) forgetKey();
@@ -1085,7 +1119,7 @@ function App() {
     addLine({
       tag: 'sys',
       mode: ENCRYPTED_LABEL,
-      text: on ? 'two-way on · sends start with a handshake · this device answers handshakes' : 'two-way off · sessions ended · one-way sends',
+      text: on ? 'two-way on · the first send starts a session with a handshake · this device answers handshakes' : 'two-way off · sessions ended · one-way sends',
     });
   };
 
@@ -1156,8 +1190,7 @@ function App() {
   const fileTickRef = useRef<() => void>(() => {});
   fileTickRef.current = () => {
     const now = Date.now();
-    for (const id of assemblerRef.current.expire(now)) dropFileLine(fileLineKey(false, id), 'expired');
-    for (const id of sealedAssemblerRef.current.expire(now)) dropFileLine(fileLineKey(true, id), 'expired');
+    for (const p of ['plain', 'psk', 'dh'] as const) for (const id of assemblerFor(p).expire(now)) dropFileLine(fileLineKey(p, id), 'expired');
     sessions.expire();
     for (const entry of fileLinesRef.current.values()) {
       if (entry.stale || now - entry.lastSeen < FILE_STALE_MS) continue;
@@ -1475,13 +1508,26 @@ function App() {
               <div id="two-way-meta" className={`tx-meta${twoWay ? '' : ' dim'}`}>
                 {twoWay ? (
                   <>
-                    <span className="warn">two-way, not one-way:</span> each send starts with a handshake that the other device answers, so both
-                    need TWO-WAY on, the same key, and a working speaker and microphone · recordings stay sealed even if the key leaks later
+                    <span className="warn">two-way, not one-way:</span> the first send starts a session with a handshake that the other device
+                    answers, so both need TWO-WAY on, the same key, and a working speaker and microphone · recordings stay sealed even if
+                    the key leaks later
                     {session ? (
                       <>
                         <br />
-                        session <span className="session-code">{sessionCode(session.id)}</span> · both screens should show the same code · new
-                        handshake after {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        session <span className="session-code">{sessionCode(session.id)}</span> · an identifier: the other screen shows the
+                        same one if you share a session, but that does not prove who you share it with · renews after{' '}
+                        {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                        <button
+                          className="log-action"
+                          disabled={txBusy}
+                          title="Use if the other device reloaded or reports a session it is not in: the next send starts a new handshake"
+                          onClick={() => {
+                            sessions.renew();
+                            addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'new session requested', note: 'the next send starts a handshake' });
+                          }}
+                        >
+                          NEW SESSION
+                        </button>
                       </>
                     ) : (
                       <>

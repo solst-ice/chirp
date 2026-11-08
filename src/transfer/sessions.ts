@@ -61,6 +61,8 @@ export interface Session {
   confirmedAt?: number;
   /** Nonces already opened, so a replay within the session is noticed. */
   seen: Set<string>;
+  /** Set by renew(): still opens frames, but no longer sent in. */
+  retired?: boolean;
 }
 
 export interface SessionInfo {
@@ -92,6 +94,17 @@ export interface SessionDeps {
   now?(): number;
   /** How long to listen for a reply after each hello. */
   replyTimeoutMs?: number;
+  /**
+   * After losing a tie and answering, how long to listen before calling
+   * again, so the winner's data starts first and listen-before-talk then
+   * holds our hello back instead of colliding with it.
+   */
+  yieldBackoffMs?: number;
+  /**
+   * Up to this long, at random, before each repeated hello, so two devices
+   * whose hellos collided do not collide again on every retry.
+   */
+  retryJitterMs?: number;
 }
 
 type Outcome = { kind: 'session'; session: Session } | { kind: 'yield'; reply: Promise<Frame> };
@@ -109,6 +122,16 @@ interface Pending {
 const infoOf = (s: Session): SessionInfo => ({ id: s.id, role: s.role, renewsAt: s.createdAt + SESSION_REUSE_MS });
 
 const abortError = () => new DOMException('cancelled', 'AbortError');
+
+/** Sleep, or reject if the job is cancelled first. */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(abortError());
+    if (ms <= 0) return resolve();
+    const onAbort = () => (clearTimeout(timer), reject(abortError()));
+    const timer = setTimeout(() => (signal.removeEventListener('abort', onAbort), resolve()), ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 
 export class SessionManager {
   private readonly deps: SessionDeps;
@@ -156,6 +179,16 @@ export class SessionManager {
     this.changed();
   }
 
+  /**
+   * Stop sending in the current sessions, so the next send starts a new one:
+   * the way out when the other device no longer has ours (it reloaded, or
+   * turned two-way off and on). Frames still arriving in them open.
+   */
+  renew() {
+    for (const s of this.sessions.values()) s.retired = true;
+    this.changed();
+  }
+
   /** The session sends would use now, if any. */
   current(): SessionInfo | null {
     this.expire();
@@ -176,7 +209,7 @@ export class SessionManager {
     const now = this.now();
     let best: Session | null = null;
     for (const s of this.sessions.values()) {
-      if (s.confirmedAt === undefined || now - s.createdAt >= SESSION_REUSE_MS) continue;
+      if (s.confirmedAt === undefined || s.retired || now - s.createdAt >= SESSION_REUSE_MS) continue;
       if (!best || s.confirmedAt > best.confirmedAt!) best = s;
     }
     return best;
@@ -241,10 +274,13 @@ export class SessionManager {
         if (this.pending === pending) this.pending = null;
       }
       this.check(generation);
+      // The data that follows waits for the turnaround in the transmitter's listen before talk.
       if (outcome.kind === 'session') return outcome.session;
       // We lost a tie: answer the other device's hello, then start over with a fresh key.
       status('handshake · the other device called at the same time · answering it first');
       await say(await outcome.reply);
+      status('handshake · letting the other device send first');
+      await pause(this.deps.yieldBackoffMs ?? 0, signal);
       this.check(generation);
     }
     throw new Error('the other device kept starting handshakes at the same time · try again');
@@ -257,6 +293,7 @@ export class SessionManager {
     for (let attempt = 0; attempt < HELLO_ATTEMPTS; attempt++) {
       status(attempt === 0 ? 'handshake · calling the other device' : `handshake · no answer · calling again (${attempt + 1}/${HELLO_ATTEMPTS})`);
       try {
+        if (attempt > 0) await pause(Math.random() * (this.deps.retryJitterMs ?? 0), AbortSignal.any([signal, pending.decided.signal]));
         await say(hello, pending.decided.signal);
       } catch (err) {
         if (pending.outcome) return pending.outcome;

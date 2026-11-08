@@ -14,6 +14,15 @@
 import type { Frame, Modem } from '../modem/types.ts';
 
 export const FRAME_GAP_MS = 120;
+/** After transmitting, a device ignores its own microphone this long, so it does not decode its echo. */
+export const ECHO_SETTLE_MS = 150;
+/**
+ * Listen before talk also waits this long after the last frame heard from
+ * another device: that device ignores its microphone for ECHO_SETTLE_MS after
+ * it stops playing, so an immediate answer (a handshake reply, data after a
+ * reply) would lose its start. Covers its output latency and our decoding too.
+ */
+export const TURNAROUND_MS = 400;
 const CHANNEL_POLL_MS = 100;
 const MAX_CHANNEL_WAIT_MS = 120_000;
 const PROGRESS_MS = 100;
@@ -77,6 +86,8 @@ export interface TransmitterDeps {
   play(samples: Float32Array): Playback;
   /** True while a frame from another device is being received. */
   channelBusy(): boolean;
+  /** Milliseconds since a frame from another device was last heard (Infinity if never). */
+  quietMs?(): number;
   /** Called just before the first frame plays. */
   beforeAudio(monitor: boolean): void;
   /** Called once after audio stops (finished, cancelled or failed); may wait for echoes. */
@@ -201,9 +212,11 @@ export class Transmitter {
     if (!modem.supports(rate)) throw new Error(`${modem.label} mode is not available at ${rate} Hz`);
 
     const waitStarted = Date.now();
-    while (this.deps.channelBusy() && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
-      this.deps.onState({ kind: 'waiting', label, modem: modem.label });
-      await sleep(CHANNEL_POLL_MS, signal);
+    const turnaround = () => TURNAROUND_MS - (this.deps.quietMs?.() ?? Infinity);
+    while ((this.deps.channelBusy() || turnaround() > 0) && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
+      const busy = this.deps.channelBusy();
+      if (busy) this.deps.onState({ kind: 'waiting', label, modem: modem.label });
+      await sleep(busy ? CHANNEL_POLL_MS : Math.min(CHANNEL_POLL_MS, Math.max(1, turnaround())), signal);
     }
     if (signal.aborted) return;
 

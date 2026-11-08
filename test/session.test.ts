@@ -244,4 +244,25 @@ describe('two-way sessions', () => {
       assert.ok(parseHandshake(frames[0].frame.payload));
     }
   });
+  test('after the receiver loses its session, NEW SESSION on the sender recovers without a loop', async () => {
+    const r = room();
+    const a = r.add('a');
+    const b = r.add('b');
+    const first = await a.manager.establish(r.say('a'), job());
+    assert.ok((await b.manager.open((await a.manager.seal(first, text('one'))).payload)).ok);
+    // B reloads (or turns two-way off and on): its sessions are gone.
+    b.manager.setEnabled(true);
+    const stale = await a.manager.establish(r.say('a'), job());
+    assert.equal(stale.id, first.id, 'the sender cannot know, so it reuses the session');
+    assert.deepEqual(await b.manager.open((await a.manager.seal(stale, text('two'))).payload), { ok: false, reason: 'session' });
+
+    a.manager.renew();
+    assert.equal(a.manager.current(), null);
+    const fresh = await a.manager.establish(r.say('a'), job());
+    assert.notEqual(fresh.id, first.id);
+    assert.ok((await b.manager.open((await a.manager.seal(fresh, text('three'))).payload)).ok);
+    // Frames still in flight in the old session open on a device that has it.
+    const late = await a.manager.seal(first, text('late')).catch(() => null);
+    assert.ok(late, 'a retired session can still seal what was already prepared');
+  });
 });

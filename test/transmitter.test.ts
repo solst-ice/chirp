@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { getModem } from '../src/modem/profiles.ts';
 import { FrameType, type Frame, type Modem } from '../src/modem/types.ts';
-import { Transmitter, type TransmitterDeps, type TxState } from '../src/transfer/transmitter.ts';
+import { TURNAROUND_MS, Transmitter, type TransmitterDeps, type TxState } from '../src/transfer/transmitter.ts';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const text = (s: string): Frame => ({ type: FrameType.Text, payload: new TextEncoder().encode(s) });
 
-function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () => number } = {}) {
+function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () => number; heardAgoMs?: number } = {}) {
   let playing = 0;
   const log = {
     maxConcurrent: 0,
@@ -19,6 +19,7 @@ function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () =>
     progress: [] as number[],
   };
   const busyUntil = Date.now() + (opts.channelBusyFor ?? 0);
+  const heardAt = Date.now() - (opts.heardAgoMs ?? 0);
   const deps: TransmitterDeps = {
     sampleRate: () => 48000,
     clock: opts.clock ?? (() => performance.now() / 1000),
@@ -34,6 +35,7 @@ function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () =>
       return { done, stop: () => (log.stopped++, finish()) };
     },
     channelBusy: () => Date.now() < busyUntil,
+    quietMs: () => (opts.heardAgoMs === undefined ? Infinity : Date.now() - heardAt),
     beforeAudio: () => void log.before++,
     afterAudio: async () => void log.after++,
     onState: (s) => {
@@ -173,5 +175,11 @@ describe('transmitter', () => {
     assert.deepEqual(await run, { status: 'cancelled', reason: 'user' });
     assert.equal(log.before, log.after);
     assert.equal(tx.busy, false);
+  });
+  test('waits out the turnaround after hearing another device, so it is listening again', async () => {
+    const { tx } = harness({ heardAgoMs: 0 });
+    const started = Date.now();
+    assert.equal((await tx.run('a', job(getModem('fast'), [text('x')]))).status, 'sent');
+    assert.ok(Date.now() - started >= TURNAROUND_MS - 10, `${Date.now() - started} ms`);
   });
 });
