@@ -684,6 +684,11 @@
   color: var(--tx);
 }
 
+.ex-seal-bytes .ex-flipped {
+  background: var(--err);
+  color: var(--bg);
+}
+
 /* The receiver's checks */
 .ex-gates {
   margin: 8px 0 0;
