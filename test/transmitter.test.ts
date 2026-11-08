@@ -129,4 +129,49 @@ describe('transmitter', () => {
     assert.ok(log.progress.length >= 3);
     assert.ok(log.progress.every((p) => p === 0), String(log.progress));
   });
+  test('a job can play handshake frames first, under the same lock, unmuting after each', async () => {
+    const { tx, log } = harness();
+    const fast = getModem('fast');
+    const out = await tx.run('message', async (_signal, ctx) => {
+      await ctx.say(fast, [text('hello')]);
+      ctx.status('waiting for an answer');
+      assert.equal(log.after, 1, 'unmuted to hear the answer');
+      assert.equal(tx.busy, true);
+      return { modem: fast, frames: [text('data')] };
+    });
+    assert.equal(out.status, 'sent');
+    assert.equal(log.played.length, 2);
+    assert.equal(log.before, 2);
+    assert.equal(log.after, 2);
+    assert.ok(log.states.includes('handshake'));
+  });
+
+  test('aborting a handshake frame before it plays leaves the job running', async () => {
+    const { tx, log } = harness({ channelBusyFor: 200 });
+    const fast = getModem('fast');
+    const out = await tx.run('message', async (_signal, ctx) => {
+      const decided = new AbortController();
+      setTimeout(() => decided.abort(), 50);
+      await assert.rejects(ctx.say(fast, [text('hello')], decided.signal), { name: 'AbortError' });
+      return { modem: fast, frames: [text('data')] };
+    });
+    assert.equal(out.status, 'sent');
+    assert.equal(log.played.length, 1);
+    assert.equal(log.before, log.after);
+  });
+
+  test('cancelling while waiting for an answer cancels the job', async () => {
+    const { tx, log } = harness();
+    const fast = getModem('fast');
+    const run = tx.run('message', async (signal, ctx) => {
+      await ctx.say(fast, [text('hello')]);
+      await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+      return null;
+    });
+    await delay(50);
+    tx.cancel();
+    assert.deepEqual(await run, { status: 'cancelled', reason: 'user' });
+    assert.equal(log.before, log.after);
+    assert.equal(tx.busy, false);
+  });
 });

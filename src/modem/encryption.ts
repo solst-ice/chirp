@@ -20,8 +20,8 @@
 import { FrameType, type Frame } from './types.ts';
 
 export const ENCRYPTION_VERSION = 1;
-const NONCE_BYTES = 12;
-const TAG_BYTES = 16;
+export const NONCE_BYTES = 12;
+export const TAG_BYTES = 16;
 const INNER_HEADER = 5;
 /** Bytes an encrypted frame adds to the payload it carries. */
 export const ENCRYPTION_OVERHEAD = 1 + NONCE_BYTES + INNER_HEADER + TAG_BYTES;
@@ -39,7 +39,7 @@ export const MAX_AHEAD_S = MAX_CLOCK_SKEW_S;
 export const MIN_KEY_CHARS = 20;
 export const PBKDF2_ITERATIONS = 600_000;
 const SALT = new TextEncoder().encode('chirp/psk/v1');
-const SEALABLE: ReadonlySet<number> = new Set([FrameType.Text, FrameType.FileManifest, FrameType.FileChunk]);
+export const SEALABLE: ReadonlySet<number> = new Set([FrameType.Text, FrameType.FileManifest, FrameType.FileChunk]);
 
 export type OpenResult =
   /** `sentAt`: the sender's authenticated timestamp, in unix seconds. */
@@ -52,12 +52,20 @@ export type OpenResult =
 /** The same passphrase typed on two keyboards should give the same key. */
 export const normalizeKey = (passphrase: string) => passphrase.normalize('NFC').trim();
 
-const subtle = () => {
+export const subtle = () => {
   if (!globalThis.crypto?.subtle) throw new Error('encryption needs a secure page (https or localhost)');
   return globalThis.crypto.subtle;
 };
 
-let cached: { passphrase: string; key: Promise<CryptoKey> } | null = null;
+/** Everything a passphrase unlocks, derived together so PBKDF2 runs once. */
+export interface PskKeys {
+  /** Seals and opens version 1 frames. */
+  aes: CryptoKey;
+  /** HMAC key that salts two-way (Diffie–Hellman) sessions; see session.ts. */
+  mix: CryptoKey;
+}
+
+let cached: { passphrase: string; keys: Promise<PskKeys> } | null = null;
 
 /** Drop the cached passphrase and key. JavaScript cannot wipe memory, but it need not keep references. */
 export function forgetKey() {
@@ -76,30 +84,52 @@ export function generateKey(): string {
   return Array.from({ length: KEY_GROUPS }, (_, i) => chars.slice(i * KEY_GROUP_CHARS, (i + 1) * KEY_GROUP_CHARS).join('')).join('-');
 }
 
-/** AES-256-GCM key for a passphrase; the last one is cached since PBKDF2 is deliberately slow. */
-export function deriveKey(passphrase: string): Promise<CryptoKey> {
+const MIX_INFO = new TextEncoder().encode('chirp/dh-psk/v1');
+
+/**
+ * Keys for a passphrase; the last set is cached since PBKDF2 is deliberately slow.
+ *
+ * The AES key is exactly what PBKDF2's deriveKey gave before (deriveKey is
+ * deriveBits followed by a raw import), so version 1 frames are unchanged. The
+ * session mixing key comes from the same bits through HKDF, which only ever
+ * hashes them, so it is independent of the AES key without a second PBKDF2 run.
+ */
+export function deriveKeys(passphrase: string): Promise<PskKeys> {
   const normalized = normalizeKey(passphrase);
   if (!normalized) return Promise.reject(new Error('enter a pre-shared key'));
-  if (cached?.passphrase === normalized) return cached.key;
-  const key = (async () => {
+  if (cached?.passphrase === normalized) return cached.keys;
+  const keys = (async () => {
     const s = subtle();
-    const material = await s.importKey('raw', new TextEncoder().encode(normalized), 'PBKDF2', false, ['deriveKey']);
-    return s.deriveKey(
-      { name: 'PBKDF2', hash: 'SHA-256', salt: SALT, iterations: PBKDF2_ITERATIONS },
-      material,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt'],
+    const material = await s.importKey('raw', new TextEncoder().encode(normalized), 'PBKDF2', false, ['deriveBits']);
+    const bits = new Uint8Array(
+      await s.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: SALT, iterations: PBKDF2_ITERATIONS }, material, 256),
     );
+    try {
+      const aes = await s.importKey('raw', bits, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      const root = await s.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+      const mix = await s.deriveKey(
+        { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: MIX_INFO },
+        root,
+        { name: 'HMAC', hash: 'SHA-256', length: 256 },
+        false,
+        ['sign'],
+      );
+      return { aes, mix };
+    } finally {
+      bits.fill(0);
+    }
   })();
-  cached = { passphrase: normalized, key };
-  key.catch(() => {
-    if (cached?.key === key) cached = null;
+  cached = { passphrase: normalized, keys };
+  keys.catch(() => {
+    if (cached?.keys === keys) cached = null;
   });
-  return key;
+  return keys;
 }
 
-const hex = (b: Uint8Array) => Array.from(b, (v) => v.toString(16).padStart(2, '0')).join('');
+/** AES-256-GCM key for a passphrase (version 1 frames). */
+export const deriveKey = (passphrase: string): Promise<CryptoKey> => deriveKeys(passphrase).then((k) => k.aes);
+
+export const hex = (b: Uint8Array) => Array.from(b, (v) => v.toString(16).padStart(2, '0')).join('');
 
 export async function encryptFrame(
   key: CryptoKey,

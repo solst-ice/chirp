@@ -38,6 +38,8 @@ export type TxState =
   | { kind: 'idle' }
   | { kind: 'preparing'; label: string }
   | { kind: 'waiting'; label: string; modem: string }
+  /** Between handshake frames, listening for the other device; `label` says what for. */
+  | { kind: 'handshake'; label: string }
   | SendingState;
 
 export interface TxJob {
@@ -45,6 +47,18 @@ export interface TxJob {
   frames: Frame[];
   /** Keep decoding the microphone while sending (loopback self-test). */
   monitor?: boolean;
+}
+
+/** What `prepare` can do while it holds the speaker. */
+export interface PrepareContext {
+  /**
+   * Play frames now, before the job's own (a handshake): waits for a clear
+   * channel, mutes the receiver while playing and unmutes after. Rejects if
+   * the job is cancelled, or `signal` aborts, before it finishes.
+   */
+  say(modem: Modem, frames: Frame[], signal?: AbortSignal): Promise<void>;
+  /** Show that the job is waiting on the other device. */
+  status(label: string): void;
 }
 
 /** 'user': the user cancelled or backed out. 'interrupted': audio stopped underneath us. */
@@ -89,6 +103,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
     signal.addEventListener('abort', onAbort, { once: true });
   });
 
+const abortError = () => new DOMException('cancelled', 'AbortError');
+
 const untilDoneOrAborted = (done: Promise<void>, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const onAbort = () => resolve();
@@ -118,82 +134,116 @@ export class Transmitter {
    */
   async run(
     label: string,
-    prepare: (signal: AbortSignal) => Promise<TxJob | null>,
+    prepare: (signal: AbortSignal, context: PrepareContext) => Promise<TxJob | null>,
     onProgress?: (state: SendingState) => void,
   ): Promise<TxOutcome> {
     if (this.active) return { status: 'busy' };
     const controller = new AbortController();
     this.active = controller;
     const { signal } = controller;
-    let audioStarted = false;
+    // Set once the job's own frames start playing; afterAudio is then owed.
+    const audio = { started: false, at: 0 };
     let monitor = false;
     const cancelled = (): TxOutcome => ({ status: 'cancelled', reason: signal.reason === 'interrupted' ? 'interrupted' : 'user' });
 
     try {
       this.deps.onState({ kind: 'preparing', label });
-      const job = await prepare(signal);
-      if (!job || signal.aborted) return cancelled();
-      const { modem, frames } = job;
-      monitor = job.monitor ?? false;
-      const rate = this.deps.sampleRate();
-      if (!modem.supports(rate)) throw new Error(`${modem.label} mode is not available at ${rate} Hz`);
-
-      const waitStarted = Date.now();
-      while (this.deps.channelBusy() && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
-        this.deps.onState({ kind: 'waiting', label, modem: modem.label });
-        await sleep(CHANNEL_POLL_MS, signal);
-      }
-      if (signal.aborted) return cancelled();
-
-      const total = airtimeOf(modem, frames);
-      const started = this.deps.clock();
-      let sent = 0;
-      const report = () => {
-        const elapsed = this.deps.clock() - started;
-        const state: SendingState = {
-          kind: 'sending',
-          label,
-          modem: modem.label,
-          progress: Math.min(0.99, elapsed / total),
-          remaining: Math.max(0, total - elapsed),
-          framesSent: sent,
-          frames: frames.length,
-        };
-        this.deps.onState(state);
-        onProgress?.(state);
-      };
-
-      audioStarted = true;
-      this.deps.beforeAudio(monitor);
-      report();
-      const timer = setInterval(report, PROGRESS_MS);
-      try {
-        for (let i = 0; i < frames.length && !signal.aborted; i++) {
-          // Rendered one frame at a time: a long file would not fit in memory as audio.
-          const playback = this.deps.play(modem.modulate(frames[i], rate));
-          await untilDoneOrAborted(playback.done, signal);
-          if (signal.aborted) {
-            playback.stop();
-            break;
+      const context: PrepareContext = {
+        say: async (modem, frames, extra) => {
+          const sub = extra ? AbortSignal.any([signal, extra]) : signal;
+          if (sub.aborted) throw abortError();
+          const audio = { started: false, at: 0 };
+          try {
+            await this.play(label, modem, frames, sub, false, audio);
+          } finally {
+            if (audio.started) await this.deps.afterAudio(false);
           }
-          sent = i + 1;
-          if (i < frames.length - 1) await sleep(FRAME_GAP_MS, signal);
-        }
-      } finally {
-        clearInterval(timer);
-      }
+          if (sub.aborted) throw abortError();
+        },
+        status: (text) => {
+          if (!signal.aborted) this.deps.onState({ kind: 'handshake', label: text });
+        },
+      };
+      const job = await prepare(signal, context);
+      if (!job || signal.aborted) return cancelled();
+      monitor = job.monitor ?? false;
+      await this.play(label, job.modem, job.frames, signal, monitor, audio, onProgress);
       if (signal.aborted) return cancelled();
-      return { status: 'sent', duration: this.deps.clock() - started };
+      return { status: 'sent', duration: this.deps.clock() - audio.at };
     } catch (err) {
       if (signal.aborted) return cancelled();
       return { status: 'failed', error: err instanceof Error ? err : new Error(String(err)) };
     } finally {
       try {
-        if (audioStarted) await this.deps.afterAudio(monitor);
+        if (audio.started) await this.deps.afterAudio(monitor);
       } finally {
         this.active = null;
         this.deps.onState({ kind: 'idle' });
       }
+    }
+  }
+
+  /**
+   * Wait for a clear channel, then play the frames; stops early if `signal`
+   * aborts. Sets `audio.started` (the caller then owes `afterAudio`, even if
+   * this throws) and `audio.at`, the clock time playback began.
+   */
+  private async play(
+    label: string,
+    modem: Modem,
+    frames: Frame[],
+    signal: AbortSignal,
+    monitor: boolean,
+    audio: { started: boolean; at: number },
+    onProgress?: (state: SendingState) => void,
+  ): Promise<void> {
+    const rate = this.deps.sampleRate();
+    if (!modem.supports(rate)) throw new Error(`${modem.label} mode is not available at ${rate} Hz`);
+
+    const waitStarted = Date.now();
+    while (this.deps.channelBusy() && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
+      this.deps.onState({ kind: 'waiting', label, modem: modem.label });
+      await sleep(CHANNEL_POLL_MS, signal);
+    }
+    if (signal.aborted) return;
+
+    const total = airtimeOf(modem, frames);
+    const started = this.deps.clock();
+    let sent = 0;
+    const report = () => {
+      const elapsed = this.deps.clock() - started;
+      const state: SendingState = {
+        kind: 'sending',
+        label,
+        modem: modem.label,
+        progress: Math.min(0.99, elapsed / total),
+        remaining: Math.max(0, total - elapsed),
+        framesSent: sent,
+        frames: frames.length,
+      };
+      this.deps.onState(state);
+      onProgress?.(state);
+    };
+
+    audio.started = true;
+    audio.at = started;
+    this.deps.beforeAudio(monitor);
+    report();
+    const timer = setInterval(report, PROGRESS_MS);
+    try {
+      for (let i = 0; i < frames.length && !signal.aborted; i++) {
+        // Rendered one frame at a time: a long file would not fit in memory as audio.
+        const playback = this.deps.play(modem.modulate(frames[i], rate));
+        await untilDoneOrAborted(playback.done, signal);
+        if (signal.aborted) {
+          playback.stop();
+          break;
+        }
+        sent = i + 1;
+        if (i < frames.length - 1) await sleep(FRAME_GAP_MS, signal);
+      }
+    } finally {
+      clearInterval(timer);
     }
   }
 }

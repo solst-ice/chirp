@@ -17,6 +17,7 @@ import {
   ReplayGuard,
   decryptFrame,
   deriveKey,
+  deriveKeys,
   encryptFrame,
   forgetKey,
   generateKey,
@@ -24,8 +25,10 @@ import {
   type OpenResult,
 } from './modem/encryption';
 import { MODEMS, getModem } from './modem/profiles';
+import { REPLY_BYTES, sessionIdOf } from './modem/session';
 import { FrameType, type DemodEvent, type Demodulator, type Frame, type Modem } from './modem/types';
-import { Transmitter, airtimeOf, type SendingState, type TxState } from './transfer/transmitter';
+import { SessionManager, type SessionInfo, type SessionOpen } from './transfer/sessions';
+import { Transmitter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
 
 // Audio signal favicon SVG data - base64 encoded for direct use
 const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIGZpbGw9IiMxMzEzMTMiLz4KICA8IS0tIFRocmVlIHNpZ25hbCBiYXJzIHdpdGggc29saWQgY29sb3JzIC0tPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiByeD0iMiIgZmlsbD0iI2ZmNDFiNCIvPiA8IS0tIFBpbmsgLS0+CiAgPHJlY3QgeD0iMjciIHk9IjMwIiB3aWR0aD0iMTAiIGhlaWdodD0iMjIiIHJ4PSIyIiBmaWxsPSIjMDBmZmFhIi8+IDwhLS0gR3JlZW4gLS0+CiAgPHJlY3QgeD0iNDIiIHk9IjE4IiB3aWR0aD0iMTAiIGhlaWdodD0iMzQiIHJ4PSIyIiBmaWxsPSIjMzE4NWZmIi8+IDwhLS0gQmx1ZSAtLT4KPC9zdmc+`;
@@ -50,6 +53,9 @@ const STATUS_NAME_CHARS = 28;
 const LOCKED_GROUP_MS = 30_000;
 // Derive the key once typing pauses, so sending does not wait on PBKDF2.
 const KEY_WARMUP_MS = 600;
+// A handshake reply waits this long after the hello ends, so the caller has stopped
+// ignoring its own echo (ECHO_SETTLE_MS) before the reply's preamble arrives.
+const REPLY_DELAY_MS = 400;
 
 /**
  * What the MODE selector picks: a modem to carry the frames and whether they
@@ -83,6 +89,23 @@ const MODES: TxMode[] = [
 ];
 
 const getMode = (id: string) => MODES.find((m) => m.id === id) ?? MODES[0];
+const ENCRYPTED_MODE = getMode('encrypted');
+
+// How long a caller listens for a handshake reply: the answering device's delay
+// and the reply's airtime, plus room for decoding and a moment of channel wait.
+const REPLY_TIMEOUT_MS = Math.ceil(REPLY_DELAY_MS + ENCRYPTED_CARRIER.airtime(REPLY_BYTES) * 1000 + 2500);
+
+/** A session id as both screens show it, e.g. 3fa9-12c0. */
+const sessionCode = (id: string) => `${id.slice(0, 4)}-${id.slice(4)}`;
+
+const sessionNote = (reason: Exclude<SessionOpen, { ok: true }>['reason'], twoWay: boolean) => {
+  if (reason === 'key') return 'wrong key for its session, or the frame was altered';
+  if (reason === 'format') return 'unsupported encryption version';
+  if (reason === 'replay') return 'already opened · a replayed recording, ignored';
+  return twoWay
+    ? 'sealed for a two-way session this device is not in (with another device, or from before a reload or key change) · ask the sender to send again'
+    : `sealed for a two-way session · select ${ENCRYPTED_LABEL}, turn on TWO-WAY with the same key, then ask the sender to send again`;
+};
 
 type Tag = 'rx' | 'tx' | 'err' | 'warn' | 'sys';
 
@@ -221,6 +244,9 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
+/** Frames that belong to ENCRYPTED mode, whichever carrier they came in on. */
+const sealedType = (type: number) => type === FrameType.Encrypted || type === FrameType.Handshake;
+
 const SEALED_LINE = 'sealed:';
 const fileLineKey = (encrypted: boolean, fileId: number) => `${encrypted ? SEALED_LINE : 'plain:'}${fileId}`;
 
@@ -342,6 +368,9 @@ function App() {
   const [showKey, setShowKey] = useState(false);
   // Whether the key was filled in by GENERATE and not edited since. A flag, so no second copy of the secret is kept.
   const [keyGenerated, setKeyGenerated] = useState(false);
+  // Two-way (PSK + Diffie–Hellman) sessions: off by default, so ENCRYPTED stays one-way. Never stored.
+  const [twoWay, setTwoWay] = useState(false);
+  const [session, setSession] = useState<SessionInfo | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -371,6 +400,7 @@ function App() {
   const keyContextRef = useRef(0);
   const replayGuardRef = useRef(new ReplayGuard());
   const lockedLineRef = useRef<LockedLine | null>(null);
+  const twoWayRef = useRef(false);
 
   modeRef.current = modeId;
   micRef.current = mic;
@@ -465,6 +495,31 @@ function App() {
   }
   const transmitter = transmitterRef.current;
 
+  const sessionsRef = useRef<SessionManager | null>(null);
+  if (!sessionsRef.current) {
+    sessionsRef.current = new SessionManager({
+      keys: () => (pskRef.current ? deriveKeys(pskRef.current) : Promise.reject(new Error('enter the pre-shared key'))),
+      answer: (frame) => {
+        if (transmitter.busy) return false;
+        void transmitter
+          .run('handshake answer', async () => {
+            await audioForPlayback();
+            await sleep(REPLY_DELAY_MS);
+            return { modem: ENCRYPTED_MODE.modem, frames: [frame] };
+          })
+          .then((outcome) => {
+            if (outcome.status === 'sent') addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'answered a two-way handshake' });
+            else if (outcome.status === 'failed')
+              addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'two-way handshake not answered', note: outcome.error.message });
+          });
+        return true;
+      },
+      onChange: setSession,
+      replyTimeoutMs: REPLY_TIMEOUT_MS,
+    });
+  }
+  const sessions = sessionsRef.current;
+
   // The OS or browser can suspend audio at any time (calls, screen lock, tab
   // switches on mobile). Whatever was in flight cannot resume mid-frame, so end
   // it visibly and let the status bar offer START AUDIO.
@@ -539,8 +594,8 @@ function App() {
   };
 
   /** Show a text frame or hand a file frame to its assembler. */
-  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number }) => {
-    const note = o.encrypted ? 'decrypted' : undefined;
+  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number; note?: string }) => {
+    const note = o.note ?? (o.encrypted ? 'decrypted' : undefined);
     if (frame.type === FrameType.Text) {
       const text = decodeText(frame.payload);
       if (o.lineId !== undefined) updateLine(o.lineId, { progress: undefined, text, note });
@@ -567,7 +622,24 @@ function App() {
     announce(`Received an encrypted frame that could not be read: ${note}`);
   };
 
+  /** A frame sealed in a two-way session (version 2): only a device in that session can open it. */
+  const openSessionFrame = async (payload: Uint8Array) => {
+    let result: SessionOpen;
+    try {
+      result = await sessions.open(payload);
+    } catch (err) {
+      noteLocked(errorText(err));
+      return;
+    }
+    if (!result.ok) {
+      noteLocked(sessionNote(result.reason, twoWayRef.current));
+      return;
+    }
+    deliverFrame(result.frame, ENCRYPTED_LABEL, { encrypted: true, note: `decrypted · session ${sessionCode(result.session)}` });
+  };
+
   const openFrame = async (payload: Uint8Array) => {
+    if (sessionIdOf(payload) !== null) return openSessionFrame(payload);
     const passphrase = pskRef.current;
     const context = keyContextRef.current;
     if (!passphrase) {
@@ -610,7 +682,7 @@ function App() {
       case 'header': {
         const r: Reception = { type: e.type, lastUi: now };
         // Encrypted frames get no row until they open: text cannot be previewed, and most are file chunks.
-        if (e.type !== FrameType.SelfTest) setRxState({ mode: e.type === FrameType.Encrypted ? ENCRYPTED_LABEL : label, progress: 0 });
+        if (e.type !== FrameType.SelfTest) setRxState({ mode: sealedType(e.type) ? ENCRYPTED_LABEL : label, progress: 0 });
         if (e.type === FrameType.Text) r.lineId = addLine({ tag: 'rx', mode: label, text: '', progress: 0 });
         receptionsRef.current.set(e.modemId, r);
         break;
@@ -620,7 +692,7 @@ function App() {
         if (!reception || reception.type === FrameType.SelfTest || now - reception.lastUi < UI_UPDATE_MS) break;
         reception.lastUi = now;
         const fraction = e.symbols / e.totalSymbols;
-        setRxState({ mode: reception.type === FrameType.Encrypted ? ENCRYPTED_LABEL : label, progress: fraction });
+        setRxState({ mode: sealedType(reception.type) ? ENCRYPTED_LABEL : label, progress: fraction });
         if (reception.lineId !== undefined) {
           updateLine(reception.lineId, { progress: fraction, text: e.preview ? decodeText(e.preview) : '' });
         }
@@ -641,7 +713,10 @@ function App() {
           break;
         }
         setLastRx({ mode: label, marginDb: e.stats.marginDb, corrected: e.stats.correctedBytes });
-        if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
+        if (frame.type === FrameType.Handshake) {
+          // Called synchronously: a tie with our own pending hello is settled before anything else plays.
+          void sessions.onHandshake(frame.payload).then((notice) => notice && addLine({ ...notice, mode: ENCRYPTED_LABEL }));
+        } else if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
         else deliverFrame(frame, label, { encrypted: false, lineId: reception?.lineId });
         break;
       }
@@ -653,6 +728,8 @@ function App() {
         if (reception?.lineId !== undefined) {
           updateLine(reception.lineId, { tag: 'err', progress: undefined, note: `corrupted: ${e.reason}` });
           announce('A received message was corrupted');
+        } else if (reception?.type === FrameType.Handshake) {
+          addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'handshake frame lost', note: 'the calling device asks again by itself' });
         } else if (reception && reception.type !== FrameType.SelfTest) {
           const encrypted = reception.type === FrameType.Encrypted;
           addLine({
@@ -732,6 +809,28 @@ function App() {
     addLine({ tag: 'sys', text: 'stopped listening' });
   };
 
+  /**
+   * Seal frames for sending: with the pre-shared key alone, or in a two-way
+   * session, running the handshake inside this job first if there is none.
+   * Two-way never falls back to the plain key: without a session, nothing is sent.
+   */
+  const seal = async (
+    frames: Frame[],
+    o: { passphrase: string; twoWay: boolean; signal: AbortSignal; context: PrepareContext; onStatus: (note?: string) => void },
+  ): Promise<{ frames: Frame[]; session?: string }> => {
+    if (!o.twoWay) return { frames: await sealAll(o.passphrase, frames) };
+    const s = await sessions.establish(
+      (frame, signal) => o.context.say(ENCRYPTED_MODE.modem, [frame], signal),
+      o.signal,
+      (text) => {
+        o.context.status(text);
+        o.onStatus(text);
+      },
+    );
+    o.onStatus(undefined);
+    return { frames: await Promise.all(frames.map((f) => sessions.seal(s, f))), session: s.id };
+  };
+
   const sendText = async (text: string): Promise<void> => {
     if (!text) return;
     if (transmitter.busy) {
@@ -741,6 +840,7 @@ function App() {
     const mode = getMode(modeRef.current);
     const m = mode.modem;
     const passphrase = pskRef.current;
+    const twoWay = mode.encrypted && twoWayRef.current;
     const payload = new TextEncoder().encode(text);
     if (payload.length > mode.maxPayload) {
       addLine({ tag: 'err', mode: m.label, text: `message too long (${payload.length}/${mode.maxPayload} bytes)` });
@@ -752,13 +852,17 @@ function App() {
     }
     const lineId = addLine({ tag: 'tx', mode: m.label, text, progress: 0 });
     setInputText('');
+    let via = '';
 
     const outcome = await transmitter.run(
       `message (${m.label})`,
-      async () => {
+      async (signal, context) => {
         await audioForPlayback();
         const frames = [{ type: FrameType.Text, payload }];
-        return { modem: m, frames: mode.encrypted ? await sealAll(passphrase, frames) : frames };
+        if (!mode.encrypted) return { modem: m, frames };
+        const sealed = await seal(frames, { passphrase, twoWay, signal, context, onStatus: (note) => updateLine(lineId, { note }) });
+        if (sealed.session) via = ` · session ${sessionCode(sealed.session)}`;
+        return { modem: m, frames: sealed.frames };
       },
       (s) => updateLine(lineId, { progress: s.progress }),
     );
@@ -766,7 +870,7 @@ function App() {
     switch (outcome.status) {
       case 'sent':
         setLastTx({ mode: m.label, bytes: payload.length, duration: outcome.duration });
-        updateLine(lineId, { progress: undefined, note: 'sent' });
+        updateLine(lineId, { progress: undefined, note: `sent${via}` });
         announce(`Sent: ${text}`);
         break;
       case 'cancelled':
@@ -792,6 +896,7 @@ function App() {
     const mode = getMode(modeRef.current);
     const m = mode.modem;
     const passphrase = pskRef.current;
+    const twoWay = mode.encrypted && twoWayRef.current;
     const keyContext = keyContextRef.current;
     if (mode.encrypted && !passphrase) {
       addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · enter a pre-shared key first' });
@@ -802,7 +907,7 @@ function App() {
 
     const outcome = await transmitter.run(
       `file ${file.name}`,
-      async (signal) => {
+      async (signal, context) => {
         await audioForPlayback();
         if (file.size > MAX_FILE_BYTES) {
           throw new Error(`${formatBytes(file.size)} is over the ${formatBytes(MAX_FILE_BYTES)} limit`);
@@ -840,14 +945,23 @@ function App() {
         ) {
           return null;
         }
-        // Sealed only now, so time spent confirming does not age the timestamps. Every frame is
-        // sealed on its own, so a receiver can open chunks in any order and RESEND still fills gaps.
-        const played = mode.encrypted ? await sealAll(passphrase, frames) : frames;
-        if (signal.aborted) return null;
         size = `${formatBytes(raw.length)}${compressed ? ` → ${formatBytes(data.length)} deflated` : ''}`;
         setLastFile({ file, fileId, modemId: mode.id, keyContext });
-        lineId = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
-        return { modem: m, frames: played };
+        const id = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
+        lineId = id;
+        // Sealed only now, so time spent confirming does not age the timestamps. Every frame is
+        // sealed on its own, so a receiver can open chunks in any order and RESEND still fills gaps.
+        if (!mode.encrypted) return { modem: m, frames };
+        const sealed = await seal(frames, {
+          passphrase,
+          twoWay,
+          signal,
+          context,
+          onStatus: (note) => updateLine(id, { note: note ? `${size} · ${note}` : size }),
+        });
+        if (sealed.session) size += ` · session ${sessionCode(sealed.session)}`;
+        if (signal.aborted) return null;
+        return { modem: m, frames: sealed.frames };
       },
       (s: SendingState) =>
         lineId !== undefined &&
@@ -958,7 +1072,21 @@ function App() {
     // Unfinished encrypted transfers belonged to the old key; their frames can't be combined with the new key's.
     sealedAssemblerRef.current = new FileAssembler();
     for (const key of [...fileLinesRef.current.keys()]) if (key.startsWith(SEALED_LINE)) dropFileLine(key, 'key changed');
+    // Two-way sessions were mixed with the old key: end them, and their keys with them.
+    sessions.reset();
     if (!normalized) forgetKey();
+  };
+
+  /** Turning two-way on or off ends every session either way. */
+  const changeTwoWay = (on: boolean) => {
+    twoWayRef.current = on;
+    setTwoWay(on);
+    sessions.setEnabled(on);
+    addLine({
+      tag: 'sys',
+      mode: ENCRYPTED_LABEL,
+      text: on ? 'two-way on · sends start with a handshake · this device answers handshakes' : 'two-way off · sessions ended · one-way sends',
+    });
   };
 
   const selectMode = (id: string) => {
@@ -1030,6 +1158,7 @@ function App() {
     const now = Date.now();
     for (const id of assemblerRef.current.expire(now)) dropFileLine(fileLineKey(false, id), 'expired');
     for (const id of sealedAssemblerRef.current.expire(now)) dropFileLine(fileLineKey(true, id), 'expired');
+    sessions.expire();
     for (const entry of fileLinesRef.current.values()) {
       if (entry.stale || now - entry.lastSeen < FILE_STALE_MS) continue;
       entry.stale = true;
@@ -1120,6 +1249,7 @@ function App() {
   else if (txState.kind === 'preparing')
     state = { text: `… PREPARING ${shorten(txState.label, STATUS_NAME_CHARS)}`, className: 'warn', actions: [cancelAction] };
   else if (txState.kind === 'waiting') state = { text: '◌ WAITING FOR CLEAR CHANNEL', className: 'warn', actions: [cancelAction] };
+  else if (txState.kind === 'handshake') state = { text: '⇄ HANDSHAKE · LISTENING FOR AN ANSWER', className: 'warn', actions: [cancelAction] };
   else if (txState.kind === 'sending')
     state = {
       text: `▲ TRANSMITTING ${txState.modem} ${Math.round(txState.progress * 100)}% · ${formatSeconds(txState.remaining)} left`,
@@ -1327,6 +1457,42 @@ function App() {
                 >
                   [ GENERATE ]
                 </button>
+              </div>
+              {/* Off by default: one-way sending needs no microphone on the sender and no answer. */}
+              <label className={`two-way${twoWay ? ' active' : ''}${txBusy ? ' disabled' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={twoWay}
+                  disabled={txBusy}
+                  aria-describedby="two-way-meta"
+                  onChange={(e) => changeTwoWay(e.target.checked)}
+                />
+                <span className="two-way-box" aria-hidden="true">
+                  {twoWay ? '[x]' : '[ ]'}
+                </span>
+                <span>TWO-WAY · Diffie–Hellman session keys</span>
+              </label>
+              <div id="two-way-meta" className={`tx-meta${twoWay ? '' : ' dim'}`}>
+                {twoWay ? (
+                  <>
+                    <span className="warn">two-way, not one-way:</span> each send starts with a handshake that the other device answers, so both
+                    need TWO-WAY on, the same key, and a working speaker and microphone · recordings stay sealed even if the key leaks later
+                    {session ? (
+                      <>
+                        <br />
+                        session <span className="session-code">{sessionCode(session.id)}</span> · both screens should show the same code · new
+                        handshake after {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </>
+                    ) : (
+                      <>
+                        <br />
+                        no session yet · the next send starts one
+                      </>
+                    )}
+                  </>
+                ) : (
+                  'off: one-way, the receiver never answers · on: Diffie–Hellman for forward secrecy, but two-way (both devices send and listen)'
+                )}
               </div>
             </>
           )}

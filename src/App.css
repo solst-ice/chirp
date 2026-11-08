@@ -737,3 +737,51 @@ details > summary:focus-visible {
     display: none;
   }
 }
+
+/* ── two-way (Diffie–Hellman) toggle ─────────────────── */
+
+.two-way {
+  position: relative;
+  display: flex;
+  gap: 1ch;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.two-way input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.two-way:hover {
+  background: var(--sel);
+}
+
+.two-way.active {
+  color: var(--rx);
+}
+
+.two-way:focus-within {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+
+.two-way.disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
+.two-way-box {
+  flex: none;
+}
+
+.tx-meta .warn {
+  color: var(--warn);
+}
+
+.session-code {
+  color: var(--rx);
+}

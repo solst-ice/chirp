@@ -11,6 +11,8 @@ export const FrameType = {
   SelfTest: 4,
   /** Another frame sealed with a pre-shared key; its real type travels inside the ciphertext. */
   Encrypted: 5,
+  /** A two-way session handshake (hello or reply), sent in the clear; see session.ts. */
+  Handshake: 6,
 } as const;
 
 export interface Frame {

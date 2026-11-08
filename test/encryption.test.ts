@@ -8,6 +8,7 @@ import {
   ReplayGuard,
   decryptFrame,
   deriveKey,
+  deriveKeys,
   encryptFrame,
   forgetKey,
   generateKey,
@@ -123,10 +124,10 @@ describe('encryption', () => {
   });
 
   test('forgetting the key drops the cached derivation', async () => {
-    const first = deriveKey(PASSPHRASE);
-    assert.equal(deriveKey(PASSPHRASE), first);
+    const first = deriveKeys(PASSPHRASE);
+    assert.equal(deriveKeys(PASSPHRASE), first);
     forgetKey();
-    assert.notEqual(deriveKey(PASSPHRASE), first);
+    assert.notEqual(deriveKeys(PASSPHRASE), first);
   });
 
   test('an encrypted file survives the FAST modem and reassembles from frames opened in any order', async () => {

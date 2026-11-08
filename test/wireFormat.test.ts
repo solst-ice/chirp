@@ -6,11 +6,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 import { crc32 } from '../src/modem/crc32.ts';
-import { deriveKey, encryptFrame } from '../src/modem/encryption.ts';
+import { deriveKey, deriveKeys, encryptFrame } from '../src/modem/encryption.ts';
 import { buildFileFrames } from '../src/modem/fileTransfer.ts';
 import { frameBytes, frameTones } from '../src/modem/mfsk.ts';
 import { PROFILES } from '../src/modem/profiles.ts';
 import { rsEncode } from '../src/modem/reedSolomon.ts';
+import { deriveSession, helloFrame, replyFrame, sealInSession, type Ephemeral } from '../src/modem/session.ts';
 import { FrameType } from '../src/modem/types.ts';
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
@@ -95,5 +96,46 @@ describe('known-answer vectors', () => {
     // Version | nonce | ciphertext of (type | unix seconds | "Hi ✓") | tag.
     assert.equal(sealed.type, FrameType.Encrypted);
     assert.equal(hex(sealed.payload), '01' + '000102030405060708090a0b' + '7501ebb815bd9cadf31c86' + '893b3b651bfdbc5298d9a7f4b6603ce3');
+  });
+  test('two-way handshake and session frame (version 2) are unchanged', async () => {
+    // RFC 7748 §6.1 key pairs: Alice calls, Bob answers.
+    const pair = async (d: string, x: string): Promise<Ephemeral> => ({
+      privateKey: await crypto.subtle.importKey(
+        'jwk',
+        { kty: 'OKP', crv: 'X25519', d: Buffer.from(d, 'hex').toString('base64url'), x: Buffer.from(x, 'hex').toString('base64url') },
+        { name: 'X25519' },
+        false,
+        ['deriveBits'],
+      ),
+      publicKey: Buffer.from(x, 'hex'),
+    });
+    const alice = await pair(
+      '77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a',
+      '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a',
+    );
+    const bob = await pair(
+      '5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb',
+      'de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f',
+    );
+    // Independently reproducible: HKDF-SHA256 of the PBKDF2 bits (info "chirp/dh-psk/v1") keys an
+    // HMAC of the X25519 secret; that is the input to HKDF-SHA256 (no salt) with info = label | "chirp/dh/v1" | hello key | reply key.
+    const { mix } = await deriveKeys('otter velvet canyon lamp orbit');
+    const a = await deriveSession(mix, alice, 'initiator', alice.publicKey, bob.publicKey);
+    const b = await deriveSession(mix, bob, 'responder', alice.publicKey, bob.publicKey);
+    assert.equal(a.idHex, b.idHex);
+    assert.deepEqual(a.confirm, b.confirm);
+
+    assert.equal(hex(helloFrame(alice.publicKey).payload), '0101' + hex(alice.publicKey));
+    // Version | kind | hello ref | responder key | confirm.
+    const reply = hex(replyFrame(alice.publicKey, bob.publicKey, b.confirm).payload);
+    assert.equal(reply.slice(0, 4 + 16 + 64), '0102' + '8520f0098930a754' + hex(bob.publicKey));
+    assert.equal(a.idHex, '43d8c184');
+    assert.equal(hex(a.confirm), '66736f783ae3fa8fa459ea5b04421cc2');
+
+    const nonce = Uint8Array.from({ length: 12 }, (_, i) => i);
+    const sealed = await sealInSession(a, frame, { nonce });
+    // Version | session id | nonce | ciphertext of (type | "Hi ✓") | tag.
+    assert.equal(sealed.type, FrameType.Encrypted);
+    assert.equal(hex(sealed.payload), '02' + '43d8c184' + '000102030405060708090a0b' + 'ba629d1f6fc200541cead6' + '5bfb4b9e70c30b1b42928a7d');
   });
 });
