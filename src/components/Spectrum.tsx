@@ -13,23 +13,28 @@ interface SpectrumProps {
   band: [number, number];
   bandLabel: string;
   transmitting: boolean;
+  /** Changing it re-reads the colour tokens; the waterfall shades have a ramp per theme. */
+  theme: 'dark' | 'light';
 }
 
 const FONT = '16px Unifont, monospace';
 const GUTTER = 5;
 const WATERFALL_TICK_MS = 90;
 const SHADES = [' ', '░', '▒', '▓', '█'];
-const SHADE_COLORS = ['', '#174456', '#1f7896', '#29d8ff', '#d8f6ff'];
-const TX_SHADE_COLORS = ['', '#174a2b', '#21854a', '#3ddc84', '#d8ffe8'];
+// Waterfall shades, faint to strong: towards white on the dark theme, towards ink on paper.
+const SHADE_COLORS = {
+  dark: { rx: ['', '#174456', '#1f7896', '#29d8ff', '#d8f6ff'], tx: ['', '#174a2b', '#21854a', '#3ddc84', '#d8ffe8'] },
+  light: { rx: ['', '#c6dadd', '#7cb0bd', '#237d95', '#00445a'], tx: ['', '#cddecb', '#83b690', '#2a814c', '#0b4721'] },
+};
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency, band, bandLabel, transmitting }) => {
+const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency, band, bandLabel, transmitting, theme }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Props read by the animation loop without restarting it.
-  const live = useRef({ band, bandLabel, transmitting });
-  live.current = { band, bandLabel, transmitting };
+  const live = useRef({ band, bandLabel, transmitting, theme });
+  live.current = { band, bandLabel, transmitting, theme };
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -53,6 +58,7 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
     let frame = 0;
     let lastWater = 0;
     let stopped = false;
+    let colorsFor: string | null = null;
 
     const colors = {
       fg: '#c9d1d9',
@@ -63,6 +69,7 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       tx: '#3ddc84',
       warn: '#ffb000',
       bg: '#0a0c10',
+      tint: 0.035,
     };
 
     const readColors = () => {
@@ -74,6 +81,8 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       colors.tx = css('--tx') || colors.tx;
       colors.warn = css('--warn') || colors.warn;
       colors.bg = css('--bg') || colors.bg;
+      colors.tint = Number(css('--band-tint')) || colors.tint;
+      colorsFor = live.current.theme;
     };
 
     const layout = () => {
@@ -131,7 +140,7 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       wctx.restore();
       wctx.fillStyle = colors.bg;
       wctx.fillRect(0, 0, w, ch);
-      const ramp = tx ? TX_SHADE_COLORS : SHADE_COLORS;
+      const ramp = SHADE_COLORS[live.current.theme][tx ? 'tx' : 'rx'];
       for (let i = 0; i < plot; i++) {
         const level = Math.min(4, Math.floor(Math.pow(values[i], 1.6) * 5.5));
         if (level === 0) continue;
@@ -143,7 +152,16 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
     const draw = (now: number) => {
       if (stopped) return;
       frame = requestAnimationFrame(draw);
-      const { band, bandLabel, transmitting } = live.current;
+      const { band, bandLabel, transmitting, theme } = live.current;
+      // The theme changed: the tokens are already switched, so read them again,
+      // and drop the waterfall's history, drawn on the old background.
+      if (theme !== colorsFor) {
+        readColors();
+        wctx.save();
+        wctx.setTransform(1, 0, 0, 1, 0, 0);
+        wctx.clearRect(0, 0, water.width, water.height);
+        wctx.restore();
+      }
       const values = columns();
       for (let i = 0; i < plot; i++) accum[i] = Math.max(accum[i], values[i]);
       if (now - lastWater > WATERFALL_TICK_MS) {
@@ -183,8 +201,10 @@ const Spectrum: React.FC<SpectrumProps> = ({ analyser, sampleRate, maxFrequency,
       if (peakCol > b1 + 1 || peakCol + peakText.length < b0) text(peakText, peakCol, 0, colors.dim);
 
       // Selected band tint.
-      ctx.fillStyle = transmitting ? 'rgba(61, 220, 132, 0.035)' : 'rgba(41, 216, 255, 0.035)';
+      ctx.globalAlpha = colors.tint;
+      ctx.fillStyle = barColor;
       ctx.fillRect(b0 * cw, top * ch, (b1 - b0 + 1) * cw, specRows * ch);
+      ctx.globalAlpha = 1;
 
       // dB gutter and axis line.
       if (analyser) {

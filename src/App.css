@@ -740,6 +740,43 @@ details > summary:focus-visible {
 
 /* ── two-way (Diffie–Hellman) toggle ─────────────────── */
 
+/* Dotted, unlike the dashed input boxes: an optional extra, not a field to fill in.
+   Drawn as spaced 2px dots, since a 1px dotted border blurs into a line. */
+.two-way-group {
+  --dot: var(--line);
+  position: relative;
+  margin-top: calc(var(--cell) / 2 + 8px);
+  padding: calc(var(--cell) / 2) 1ch 6px;
+  background:
+    repeating-linear-gradient(to right, var(--dot) 0 2px, transparent 2px 6px) top / 100% 2px no-repeat,
+    repeating-linear-gradient(to right, var(--dot) 0 2px, transparent 2px 6px) bottom / 100% 2px no-repeat,
+    repeating-linear-gradient(to bottom, var(--dot) 0 2px, transparent 2px 6px) left / 2px 100% no-repeat,
+    repeating-linear-gradient(to bottom, var(--dot) 0 2px, transparent 2px 6px) right / 2px 100% no-repeat;
+}
+
+/* Sits on the top edge, like the panel titles. */
+.two-way-tag {
+  position: absolute;
+  top: calc(var(--cell) / -2);
+  left: 1ch;
+  padding: 0 0.5ch;
+  background: var(--bg);
+  color: var(--dim);
+  pointer-events: none;
+}
+
+.two-way-group > .two-way {
+  margin-top: 0;
+}
+
+.two-way-group .two-way-notes {
+  margin-bottom: 4px;
+}
+
+.two-way-group > .tx-meta {
+  margin: 0;
+}
+
 .two-way {
   position: relative;
   display: flex;
@@ -760,9 +797,6 @@ details > summary:focus-visible {
   background: var(--sel);
 }
 
-.two-way.active {
-  color: var(--rx);
-}
 
 .two-way:focus-within {
   outline: 1px dashed var(--accent);
@@ -774,8 +808,22 @@ details > summary:focus-visible {
   cursor: not-allowed;
 }
 
-.two-way-box {
+/* Fixed width, so the label does not shift when the state changes. */
+.two-way-state {
   flex: none;
+  min-width: 12ch;
+}
+
+.two-way-state.on {
+  color: var(--tx);
+}
+
+.two-way-state.off {
+  color: var(--err);
+}
+
+.two-way.disabled .two-way-state {
+  opacity: 0.6;
 }
 
 .tx-meta .warn {

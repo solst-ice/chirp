@@ -28,6 +28,7 @@ import { MODEMS, getModem } from './modem/profiles';
 import { REPLY_BYTES, sessionIdOf } from './modem/session';
 import { FrameType, type DemodEvent, type Demodulator, type Frame, type Modem } from './modem/types';
 import { SessionManager, type SessionInfo, type SessionOpen } from './transfer/sessions';
+import { applyTheme, initialTheme, storeTheme, type Theme } from './theme';
 import { ECHO_SETTLE_MS, Transmitter, holdoffAfter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
 
 // Audio signal favicon SVG data - base64 encoded for direct use
@@ -379,6 +380,8 @@ function App() {
   // Two-way (PSK + Diffie–Hellman) sessions: off by default, so ENCRYPTED stays one-way. Never stored.
   const [twoWay, setTwoWay] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
+  // Already applied by main.tsx before the first render; this mirrors it.
+  const [theme, setTheme] = useState<Theme>(initialTheme);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1328,6 +1331,20 @@ function App() {
         <span className="dim topbar-sub">
           {(sampleRate / 1000).toFixed(1)}kHz · {captureMethod}
         </span>
+        {/* Names the theme it switches to. The explainer has no toggle: it stays dark. */}
+        <button
+          className="btn theme-toggle"
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          onClick={() => {
+            const next: Theme = theme === 'dark' ? 'light' : 'dark';
+            applyTheme(next);
+            storeTheme(next);
+            setTheme(next);
+          }}
+        >
+          [ {theme === 'dark' ? '☀ LIGHT' : '☾ DARK'} ]
+        </button>
       </header>
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {announcement}
@@ -1346,6 +1363,7 @@ function App() {
                 band={modem.band}
                 bandLabel={`TX:${modem.label}`}
                 transmitting={txState.kind === 'sending'}
+                theme={theme}
               />
             )}
           </details>
@@ -1495,54 +1513,61 @@ function App() {
                   [ GENERATE ]
                 </button>
               </div>
-              {/* Off by default: one-way sending needs no microphone on the sender and no answer. */}
-              <label className={`two-way${twoWay ? ' active' : ''}${txBusy ? ' disabled' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={twoWay}
-                  disabled={txBusy}
-                  aria-describedby="two-way-meta"
-                  onChange={(e) => changeTwoWay(e.target.checked)}
-                />
-                <span className="two-way-box" aria-hidden="true">
-                  {twoWay ? '[x]' : '[ ]'}
+              {/* Off by default: one-way sending needs no microphone on the sender and no answer.
+                  Boxed with its status and explanation, so they read as one optional extra. */}
+              <div className="two-way-group" role="group" aria-label="Optional: two-way sessions">
+                <span className="two-way-tag" aria-hidden="true">
+                  optional
                 </span>
-                <span>TWO-WAY · Diffie–Hellman session keys</span>
-              </label>
-              {twoWay && (
-                <div className="tx-meta">
-                  {session ? (
-                    <>
-                      session <span className="session-code">{sessionCode(session.id)}</span> · renews{' '}
-                      {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
-                      <button
-                        className="log-action"
-                        disabled={txBusy}
-                        title="Use if the other device reloaded or reports a session it is not in: the next send starts a new handshake"
-                        onClick={() => {
-                          sessions.renew();
-                          addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'new session requested', note: 'the next send starts a handshake' });
-                        }}
-                      >
-                        NEW SESSION
-                      </button>
-                    </>
-                  ) : (
-                    'no session yet · the next send starts one'
-                  )}
-                </div>
-              )}
-              {/* Collapsed by default; the checkbox is described by its contents either way. */}
-              <details className="two-way-about">
-                <summary className="dim">requires a mic on both devices</summary>
-                <ul id="two-way-meta" className="tx-meta two-way-notes">
-                  <li>off: one-way · the receiver never answers</li>
-                  <li>on: the first send starts a session with a handshake the other device answers · both need TWO-WAY, the same key, and a working speaker and mic</li>
-                  <li>recordings stay sealed even if the key leaks later</li>
-                  <li>the session code identifies the session; matching codes do not prove who is on the other end</li>
-                  <li>NEW SESSION: if the other device reloaded, or says it is not in your session</li>
-                </ul>
-              </details>
+                <label className={`two-way${txBusy ? ' disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={twoWay}
+                    disabled={txBusy}
+                    aria-describedby="two-way-meta"
+                    onChange={(e) => changeTwoWay(e.target.checked)}
+                  />
+                  {/* The native checkbox stays for keyboards and screen readers; this shows its state. */}
+                  <span className={`two-way-state ${twoWay ? 'on' : 'off'}`} aria-hidden="true">
+                    [ {twoWay ? 'ENABLED' : 'DISABLED'} ]
+                  </span>
+                  <span>TWO-WAY · Diffie–Hellman session keys</span>
+                </label>
+                {twoWay && (
+                  <div className="tx-meta">
+                    {session ? (
+                      <>
+                        session <span className="session-code">{sessionCode(session.id)}</span> · renews{' '}
+                        {new Date(session.renewsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                        <button
+                          className="log-action"
+                          disabled={txBusy}
+                          title="Use if the other device reloaded or reports a session it is not in: the next send starts a new handshake"
+                          onClick={() => {
+                            sessions.renew();
+                            addLine({ tag: 'sys', mode: ENCRYPTED_LABEL, text: 'new session requested', note: 'the next send starts a handshake' });
+                          }}
+                        >
+                          NEW SESSION
+                        </button>
+                      </>
+                    ) : (
+                      'no session yet · the next send starts one'
+                    )}
+                  </div>
+                )}
+                {/* Collapsed by default; the checkbox is described by its contents either way. */}
+                <details className="two-way-about">
+                  <summary className="dim">requires a mic on both devices</summary>
+                  <ul id="two-way-meta" className="tx-meta two-way-notes">
+                    <li>off: one-way · the receiver never answers</li>
+                    <li>on: the first send starts a session with a handshake the other device answers · both need TWO-WAY, the same key, and a working speaker and mic</li>
+                    <li>recordings stay sealed even if the key leaks later</li>
+                    <li>the session code identifies the session; matching codes do not prove who is on the other end</li>
+                    <li>NEW SESSION: if the other device reloaded, or says it is not in your session</li>
+                  </ul>
+                </details>
+              </div>
             </>
           )}
 

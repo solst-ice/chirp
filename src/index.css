@@ -21,6 +21,8 @@
   --warn: #ffb000;
   --err: #ff4d5e;
   --cell: 16px;
+  /* The spectrum's band tint: how strongly the selected band is shaded. */
+  --band-tint: 0.035;
 
   color-scheme: dark;
   font-family: 'Unifont', ui-monospace, monospace;
@@ -32,6 +34,28 @@
   -webkit-font-smoothing: none;
   -moz-osx-font-smoothing: unset;
   text-rendering: optimizeSpeed;
+}
+
+/*
+ * Light theme, for the app only (the explainer never sets data-theme).
+ * Warm paper rather than white: the dark theme's neon accents become inks,
+ * which read like a printed terminal log and glare less than on pure white.
+ * Every text colour is at least 5.2:1 on both --bg and --sel (WCAG AA).
+ */
+:root[data-theme='light'] {
+  --bg: #f4f1e8;
+  --fg: #23262d;
+  --dim: #565c66;
+  --line: #d6cfbd;
+  --sel: #e9e4d6;
+  --accent: #b3114b;
+  --rx: #00627d;
+  --tx: #146a34;
+  --warn: #7c5100;
+  --err: #b3212b;
+  --band-tint: 0.07;
+
+  color-scheme: light;
 }
 
 * {
