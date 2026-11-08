@@ -401,6 +401,10 @@
   color: var(--err);
 }
 
+.tx-meta.warn {
+  color: var(--warn);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -642,7 +646,7 @@ details > summary:focus-visible {
 @media (max-width: 760px), (max-height: 500px) {
   .modes {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0 4px;
   }
 

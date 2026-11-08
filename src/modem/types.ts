@@ -9,6 +9,8 @@ export const FrameType = {
   FileChunk: 3,
   /** Loopback self-test; carries a random nonce and is never shown to other receivers. */
   SelfTest: 4,
+  /** Another frame sealed with a pre-shared key; its real type travels inside the ciphertext. */
+  Encrypted: 5,
 } as const;
 
 export interface Frame {

@@ -11,8 +11,18 @@ import {
   newFileId,
   type FileProgress,
 } from './modem/fileTransfer';
+import {
+  ENCRYPTION_OVERHEAD,
+  MIN_KEY_CHARS,
+  ReplayGuard,
+  decryptFrame,
+  deriveKey,
+  encryptFrame,
+  normalizeKey,
+  type OpenResult,
+} from './modem/encryption';
 import { MODEMS, getModem } from './modem/profiles';
-import { FrameType, type DemodEvent, type Demodulator, type Modem } from './modem/types';
+import { FrameType, type DemodEvent, type Demodulator, type Frame, type Modem } from './modem/types';
 import { Transmitter, airtimeOf, type SendingState, type TxState } from './transfer/transmitter';
 
 // Audio signal favicon SVG data - base64 encoded for direct use
@@ -34,6 +44,10 @@ const PROGRESS_WIDTH = 16;
 // Longest name shown in the status bar; the log row carries the full name.
 const STATUS_NAME_CHARS = 28;
 // Phones and short windows start with the spectrum collapsed so the composer is on screen.
+// Undecryptable frames arriving within this long of each other share one log row.
+const LOCKED_GROUP_MS = 30_000;
+// Derive the key once typing pauses, so sending does not wait on PBKDF2.
+const KEY_WARMUP_MS = 600;
 
 // Typing STARTDEMO on one device sets off a short exchange between two.
 const DEMO_REPLIES: Record<string, string> = {
@@ -41,6 +55,39 @@ const DEMO_REPLIES: Record<string, string> = {
   'HELLO! BOSS!': 'WHOAMI',
   WHOAMI: 'SOLST/ICE',
 };
+
+/**
+ * What the MODE selector picks: a modem to carry the frames and whether they
+ * are encrypted first. The receiver listens on every modem and recognises
+ * encrypted frames by their type, whichever mode is selected.
+ */
+interface TxMode {
+  id: string;
+  label: string;
+  description: string;
+  modem: Modem;
+  encrypted: boolean;
+  /** Largest message, after any encryption overhead. */
+  maxPayload: number;
+}
+
+const ENCRYPTED_LABEL = 'ENCRYPTED';
+const ENCRYPTED_CARRIER = getModem('fast');
+
+const MODES: TxMode[] = [
+  ...MODEMS.map((m) => ({ id: m.id, label: m.label, description: m.description, modem: m, encrypted: false, maxPayload: m.maxPayload })),
+  {
+    id: 'encrypted',
+    label: ENCRYPTED_LABEL,
+    description: `${ENCRYPTED_CARRIER.label} tones, sealed with a pre-shared key (AES-256-GCM): only a device with the same key can read it or send it`,
+    // The carrier, labelled as this mode so the status bar and spectrum say ENCRYPTED.
+    modem: { ...ENCRYPTED_CARRIER, label: ENCRYPTED_LABEL },
+    encrypted: true,
+    maxPayload: ENCRYPTED_CARRIER.maxPayload - ENCRYPTION_OVERHEAD,
+  },
+];
+
+const getMode = (id: string) => MODES.find((m) => m.id === id) ?? MODES[0];
 
 type Tag = 'rx' | 'tx' | 'err' | 'warn' | 'sys';
 
@@ -81,6 +128,13 @@ interface FileLine {
   total?: number;
   lastSeen: number;
   stale: boolean;
+}
+
+interface LockedLine {
+  lineId: number;
+  note: string;
+  count: number;
+  lastSeen: number;
 }
 
 interface SelfTest {
@@ -127,16 +181,31 @@ const cleanText = (s: string) => s.replace(CONTROL_CHARS, '');
 
 const decodeText = (bytes: Uint8Array) => cleanText(new TextDecoder().decode(bytes));
 
-const goodput = (modemId: string) => Math.round((100 * 8) / getModem(modemId).airtime(100));
+const goodput = (mode: TxMode) => Math.round((100 * 8) / mode.modem.airtime(100 + (mode.encrypted ? ENCRYPTION_OVERHEAD : 0)));
+
+/** Airtime of a message of this many bytes once it is framed (and sealed) for a mode. */
+const messageAirtime = (mode: TxMode, bytes: number) => mode.modem.airtime(bytes + (mode.encrypted ? ENCRYPTION_OVERHEAD : 0));
+
+const sealAll = async (passphrase: string, frames: Frame[]) => {
+  const key = await deriveKey(passphrase);
+  return Promise.all(frames.map((f) => encryptFrame(key, f)));
+};
+
+const unopenedNote = (result: Exclude<OpenResult, { ok: true }>) => {
+  if (result.reason === 'key') return 'wrong pre-shared key, or the frame was altered';
+  if (result.reason === 'format') return 'unsupported encryption version';
+  const off = formatSeconds(Math.abs(result.skew));
+  return `sent ${off} ${result.skew < 0 ? 'ago' : 'in the future'} · a replayed recording, or the two clocks disagree`;
+};
 
 const readStoredMode = () => {
   try {
     const stored = localStorage.getItem(MODE_KEY);
-    if (stored && MODEMS.some((m) => m.id === stored)) return stored;
+    if (stored && MODES.some((m) => m.id === stored)) return stored;
   } catch {
     // Storage can be unavailable (private mode); fall back to the default.
   }
-  return MODEMS[0].id;
+  return MODES[0].id;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -258,6 +327,8 @@ function App() {
   // Open where there's room; on phones and short windows the composer below the spectrum comes first.
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px) and (min-height: 800px)').matches);
   const [spectrumOpen, setSpectrumOpen] = useState(true);
+  // Kept in memory only: never stored, so closing the tab forgets it.
+  const [psk, setPsk] = useState('');
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -276,10 +347,15 @@ function App() {
   const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pskRef = useRef('');
+  const replayGuardRef = useRef(new ReplayGuard());
+  const lockedLineRef = useRef<LockedLine | null>(null);
 
   modeRef.current = modeId;
   micRef.current = mic;
-  const modem = getModem(modeId);
+  pskRef.current = normalizeKey(psk);
+  const mode = getMode(modeId);
+  const modem = mode.modem;
   const txBusy = txState.kind !== 'idle';
 
   const addLine = (line: Omit<LogLine, 'id' | 'time'>) => {
@@ -435,6 +511,60 @@ function App() {
     }
   };
 
+  const deliverFrame = (frame: Frame, label: string, lineId?: number, note?: string) => {
+    if (frame.type === FrameType.Text) {
+      const text = decodeText(frame.payload);
+      if (lineId !== undefined) updateLine(lineId, { progress: undefined, text, note });
+      else addLine({ tag: 'rx', mode: label, text, note });
+      announce(`Received: ${text}`);
+      const reply = DEMO_REPLIES[text.trim().toUpperCase()];
+      if (reply) setTimeout(() => sendTextRef.current(reply, false), 1300);
+    } else {
+      const progress = assemblerRef.current.accept(frame);
+      if (progress) void handleFileProgress(progress, label);
+    }
+  };
+
+  /** One row for a run of frames that could not be opened, rather than one per file chunk. */
+  const noteLocked = (note: string) => {
+    const now = Date.now();
+    const prev = lockedLineRef.current;
+    if (prev && prev.note === note && now - prev.lastSeen < LOCKED_GROUP_MS) {
+      prev.count++;
+      prev.lastSeen = now;
+      updateLine(prev.lineId, { text: `${prev.count} encrypted frames` });
+      return;
+    }
+    const lineId = addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'encrypted frame', note });
+    lockedLineRef.current = { lineId, note, count: 1, lastSeen: now };
+    announce(`Received an encrypted frame that could not be read: ${note}`);
+  };
+
+  const openFrame = async (payload: Uint8Array) => {
+    const passphrase = pskRef.current;
+    if (!passphrase) {
+      noteLocked(`select ${ENCRYPTED_LABEL} and enter the pre-shared key to read these`);
+      return;
+    }
+    let result: OpenResult;
+    try {
+      result = await decryptFrame(await deriveKey(passphrase), payload);
+    } catch (err) {
+      noteLocked(errorText(err));
+      return;
+    }
+    if (!result.ok) {
+      noteLocked(unopenedNote(result));
+      return;
+    }
+    if (replayGuardRef.current.replayed(result.nonce)) {
+      // Repeated file frames are harmless (the assembler ignores them); a repeated message is worth a mention.
+      if (result.frame.type === FrameType.Text) addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'replayed encrypted message ignored' });
+      return;
+    }
+    deliverFrame(result.frame, ENCRYPTED_LABEL, undefined, 'decrypted');
+  };
+
   // Reassigned every render so callbacks from the capture node always see current state.
   const handleEventRef = useRef<(e: DemodEvent) => void>(() => {});
   handleEventRef.current = (e: DemodEvent) => {
@@ -449,7 +579,8 @@ function App() {
 
       case 'header': {
         const r: Reception = { type: e.type, lastUi: now };
-        if (e.type !== FrameType.SelfTest) setRxState({ mode: label, progress: 0 });
+        // Encrypted frames get no row until they open: text cannot be previewed, and most are file chunks.
+        if (e.type !== FrameType.SelfTest) setRxState({ mode: e.type === FrameType.Encrypted ? ENCRYPTED_LABEL : label, progress: 0 });
         if (e.type === FrameType.Text) r.lineId = addLine({ tag: 'rx', mode: label, text: '', progress: 0 });
         receptionsRef.current.set(e.modemId, r);
         break;
@@ -459,7 +590,7 @@ function App() {
         if (!reception || reception.type === FrameType.SelfTest || now - reception.lastUi < UI_UPDATE_MS) break;
         reception.lastUi = now;
         const fraction = e.symbols / e.totalSymbols;
-        setRxState({ mode: label, progress: fraction });
+        setRxState({ mode: reception.type === FrameType.Encrypted ? ENCRYPTED_LABEL : label, progress: fraction });
         if (reception.lineId !== undefined) {
           updateLine(reception.lineId, { progress: fraction, text: e.preview ? decodeText(e.preview) : '' });
         }
@@ -480,17 +611,8 @@ function App() {
           break;
         }
         setLastRx({ mode: label, marginDb: e.stats.marginDb, corrected: e.stats.correctedBytes });
-        if (frame.type === FrameType.Text) {
-          const text = decodeText(frame.payload);
-          if (reception?.lineId !== undefined) updateLine(reception.lineId, { progress: undefined, text });
-          else addLine({ tag: 'rx', mode: label, text });
-          announce(`Received: ${text}`);
-          const reply = DEMO_REPLIES[text.trim().toUpperCase()];
-          if (reply) setTimeout(() => sendTextRef.current(reply, false), 1300);
-        } else {
-          const progress = assemblerRef.current.accept(frame);
-          if (progress) void handleFileProgress(progress, label);
-        }
+        if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
+        else deliverFrame(frame, label, reception?.lineId);
         break;
       }
 
@@ -502,7 +624,13 @@ function App() {
           updateLine(reception.lineId, { tag: 'err', progress: undefined, note: `corrupted: ${e.reason}` });
           announce('A received message was corrupted');
         } else if (reception && reception.type !== FrameType.SelfTest) {
-          addLine({ tag: 'err', mode: label, text: 'file chunk lost', note: 'ask the sender to resend' });
+          const encrypted = reception.type === FrameType.Encrypted;
+          addLine({
+            tag: 'err',
+            mode: encrypted ? ENCRYPTED_LABEL : label,
+            text: encrypted ? 'encrypted frame lost' : 'file chunk lost',
+            note: 'ask the sender to resend',
+          });
         }
         break;
     }
@@ -582,10 +710,16 @@ function App() {
       else addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
       return;
     }
-    const m = getModem(modeRef.current);
+    const mode = getMode(modeRef.current);
+    const m = mode.modem;
+    const passphrase = pskRef.current;
     const payload = new TextEncoder().encode(text);
-    if (payload.length > m.maxPayload) {
-      addLine({ tag: 'err', mode: m.label, text: `message too long (${payload.length}/${m.maxPayload} bytes)` });
+    if (payload.length > mode.maxPayload) {
+      addLine({ tag: 'err', mode: m.label, text: `message too long (${payload.length}/${mode.maxPayload} bytes)` });
+      return;
+    }
+    if (mode.encrypted && !passphrase) {
+      addLine({ tag: 'err', mode: m.label, text: 'not sent · enter a pre-shared key first' });
       return;
     }
     const lineId = addLine({ tag: 'tx', mode: m.label, text, progress: 0 });
@@ -595,7 +729,8 @@ function App() {
       `message (${m.label})`,
       async () => {
         await audioForPlayback();
-        return { modem: m, frames: [{ type: FrameType.Text, payload }] };
+        const frames = [{ type: FrameType.Text, payload }];
+        return { modem: m, frames: mode.encrypted ? await sealAll(passphrase, frames) : frames };
       },
       (s) => updateLine(lineId, { progress: s.progress }),
     );
@@ -628,7 +763,13 @@ function App() {
       addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
       return;
     }
-    const m = getModem(modeRef.current);
+    const mode = getMode(modeRef.current);
+    const m = mode.modem;
+    const passphrase = pskRef.current;
+    if (mode.encrypted && !passphrase) {
+      addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · enter a pre-shared key first' });
+      return;
+    }
     let lineId: number | undefined;
     let size = '';
 
@@ -642,8 +783,8 @@ function App() {
         const raw = new Uint8Array(await file.arrayBuffer());
         const { data, compressed } = await maybeCompress(raw);
         if (signal.aborted) return null;
-        const fileId = reuse && reuse.modemId === m.id ? reuse.fileId : newFileId();
-        const build = (target: Modem) =>
+        const fileId = reuse && reuse.modemId === mode.id ? reuse.fileId : newFileId();
+        const build = (target: { rawBitRate: number; maxPayload: number }) =>
           buildFileFrames({
             fileId,
             name: file.name,
@@ -653,13 +794,15 @@ function App() {
             compressed,
             chunkSize: chunkSizeFor(target),
           }).frames;
-        const frames = build(m);
+        // Every frame is sealed on its own, so a receiver can open chunks in any order and RESEND still fills gaps.
+        const frames = mode.encrypted ? await sealAll(passphrase, build({ rawBitRate: m.rawBitRate, maxPayload: mode.maxPayload })) : build(m);
+        if (signal.aborted) return null;
         const eta = airtimeOf(m, frames);
         if (eta > MAX_AIRTIME_S) {
           const fast = MODEMS[0];
           const fastEta = airtimeOf(fast, build(fast));
           const hint =
-            m.id !== fast.id && fastEta <= MAX_AIRTIME_S
+            !mode.encrypted && m.id !== fast.id && fastEta <= MAX_AIRTIME_S
               ? `try ${fast.label} (~${formatSeconds(fastEta)})`
               : 'send a smaller or more compressible file';
           throw new Error(`would take ~${formatSeconds(eta)} in ${m.label}; the limit is ${formatSeconds(MAX_AIRTIME_S)} · ${hint}`);
@@ -671,7 +814,7 @@ function App() {
           return null;
         }
         size = `${formatBytes(raw.length)}${compressed ? ` → ${formatBytes(data.length)} deflated` : ''}`;
-        setLastFile({ file, fileId, modemId: m.id });
+        setLastFile({ file, fileId, modemId: mode.id });
         lineId = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
         return { modem: m, frames };
       },
@@ -707,7 +850,7 @@ function App() {
 
   const resendLastFile = () => {
     // Chunk boundaries depend on the mode, so the id (which lets the receiver
-    // merge chunks) is only reused when the mode is unchanged.
+    // merge chunks) is only reused when the mode, encrypted or not, is unchanged.
     if (lastFile) void sendFile(lastFile.file, lastFile);
   };
 
@@ -717,7 +860,8 @@ function App() {
       return;
     }
     if (transmitter.busy) return;
-    const m = getModem(modeRef.current);
+    // Tests the carrier only; the test frame is never encrypted.
+    const m = getMode(modeRef.current).modem;
     const nonce = crypto.getRandomValues(new Uint8Array(8));
     let resolve!: () => void;
     const done = new Promise<void>((r) => (resolve = r));
@@ -759,7 +903,7 @@ function App() {
   };
 
   const selectMode = (id: string) => {
-    if (transmitter.busy || !getModem(id).supports(sampleRate)) return;
+    if (transmitter.busy || !getMode(id).modem.supports(sampleRate)) return;
     setModeId(id);
     try {
       localStorage.setItem(MODE_KEY, id);
@@ -776,9 +920,9 @@ function App() {
       transmitter.cancel();
     } else if (e.altKey && !e.ctrlKey && !e.metaKey) {
       const digit = /^Digit([1-9])$/.exec(e.code);
-      if (digit && MODEMS[Number(digit[1]) - 1]) {
+      if (digit && MODES[Number(digit[1]) - 1]) {
         e.preventDefault();
-        selectMode(MODEMS[Number(digit[1]) - 1].id);
+        selectMode(MODES[Number(digit[1]) - 1].id);
       } else if (e.code === 'KeyF') {
         e.preventDefault();
         if (!transmitter.busy) fileInputRef.current?.click();
@@ -851,6 +995,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!normalizeKey(psk)) return;
+    const t = setTimeout(() => void deriveKey(psk).catch(() => undefined), KEY_WARMUP_MS);
+    return () => clearTimeout(t);
+  }, [psk]);
+
+  useEffect(() => {
     for (const rel of ['icon', 'apple-touch-icon']) {
       let link = document.querySelector(`link[rel~='${rel}']`) as HTMLLinkElement | null;
       if (!link) {
@@ -874,7 +1024,9 @@ function App() {
   };
 
   const payloadBytes = new TextEncoder().encode(inputText).length;
-  const overLimit = payloadBytes > modem.maxPayload;
+  const overLimit = payloadBytes > mode.maxPayload;
+  const keyChars = Array.from(normalizeKey(psk)).length;
+  const keyMissing = mode.encrypted && keyChars === 0;
   const maxFrequency = Math.min(20000, sampleRate / 2);
   const audioRunning = audioState === 'running';
 
@@ -1015,11 +1167,11 @@ function App() {
           </details>
         </Panel>
 
-        <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODEMS.length} mode</span>} className="p-tx">
+        <Panel title="TRANSMIT" right={<span className="hotkey-hint">alt+1–{MODES.length} mode</span>} className="p-tx">
           <fieldset className="modes" disabled={txBusy}>
             <legend className="field-label">MODE</legend>
-            {MODEMS.map((m, i) => {
-              const supported = m.supports(sampleRate);
+            {MODES.map((m, i) => {
+              const supported = m.modem.supports(sampleRate);
               const active = m.id === modeId;
               return (
                 <label
@@ -1039,8 +1191,8 @@ function App() {
                     {active ? '(•)' : '( )'}
                   </span>
                   <span className="mode-name">{m.label}</span>
-                  <span className="mode-band">{formatBand(m.band)}</span>
-                  <span className="mode-rate">~{goodput(m.id)} b/s</span>
+                  <span className="mode-band">{formatBand(m.modem.band)}</span>
+                  <span className="mode-rate">~{goodput(m)} b/s</span>
                   <span className="mode-key" aria-hidden="true">
                     {i + 1}
                   </span>
@@ -1050,10 +1202,49 @@ function App() {
           </fieldset>
           <div className="mode-hint">
             <span className="mode-hint-specs">
-              ~{goodput(modem.id)} b/s · {formatBand(modem.band)} ·{' '}
+              ~{goodput(mode)} b/s · {formatBand(modem.band)} ·{' '}
             </span>
-            {modem.description}
+            {mode.description}
           </div>
+
+          {mode.encrypted && (
+            <>
+              <label className="field-label" htmlFor="psk">
+                PRE-SHARED KEY
+              </label>
+              <div className="prompt">
+                <span className="prompt-sign" aria-hidden="true">
+                  #
+                </span>
+                {/* A textarea so a long key wraps and stays readable; the key itself is one line. */}
+                <textarea
+                  id="psk"
+                  value={psk}
+                  rows={2}
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  aria-describedby="psk-meta"
+                  onChange={(e) => setPsk(e.target.value.replace(/[\r\n]+/g, ' '))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      inputRef.current?.focus();
+                    }
+                  }}
+                  placeholder="type a 20+ character key, same on both devices"
+                />
+              </div>
+              <div id="psk-meta" className={`tx-meta${keyChars > 0 && keyChars < MIN_KEY_CHARS ? ' warn' : ''}`}>
+                {keyChars === 0
+                  ? 'needed to send · also opens encrypted messages you receive · kept in memory only'
+                  : keyChars < MIN_KEY_CHARS
+                    ? `${keyChars} chars · short keys can be guessed from a recording: use 5+ random words`
+                    : `${keyChars} chars · case-sensitive · kept in memory only`}
+              </div>
+            </>
+          )}
 
           <label className="field-label" htmlFor="composer">
             MESSAGE
@@ -1074,7 +1265,7 @@ function App() {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  if (inputText.trim() && !overLimit) void sendText(inputText, true);
+                  if (inputText.trim() && !overLimit && !keyMissing) void sendText(inputText, true);
                 } else if (e.key === 'Escape' && !transmitter.busy) {
                   e.currentTarget.blur();
                 }
@@ -1086,8 +1277,8 @@ function App() {
             <div className="tx-hint">open chirp on a second device and allow its microphone, then send</div>
           )}
           <div className={`tx-meta${overLimit ? ' err' : ''}`}>
-            {payloadBytes}/{modem.maxPayload} B
-            {payloadBytes > 0 && ` · ~${formatSeconds(modem.airtime(payloadBytes))} airtime`}
+            {payloadBytes}/{mode.maxPayload} B
+            {payloadBytes > 0 && ` · ~${formatSeconds(messageAirtime(mode, payloadBytes))} airtime`}
           </div>
 
           <div className="actions">
@@ -1096,15 +1287,15 @@ function App() {
                 [ <span className="key-hint">ESC </span>CANCEL ]
               </button>
             ) : (
-              <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit}>
+              <button className="btn btn-primary" onClick={() => void sendText(inputText, true)} disabled={!inputText || overLimit || keyMissing}>
                 [ ⏎ SEND ]
               </button>
             )}
-            <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy}>
+            <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={txBusy || keyMissing}>
               [ <span className="key">F</span>ILE ]
             </button>
             {lastFile && (
-              <button className="btn" onClick={resendLastFile} disabled={txBusy} title={`Resend ${lastFile.file.name}`}>
+              <button className="btn" onClick={resendLastFile} disabled={txBusy || keyMissing} title={`Resend ${lastFile.file.name}`}>
                 [ <span className="key">R</span>ESEND {lastFile.file.name} ]
               </button>
             )}
@@ -1150,7 +1341,7 @@ function App() {
       <footer className="keybar">
         <span className="hotkeys">
           <span className="key">⏎</span> send <span className="key">esc</span> cancel <span className="key">/</span> focus{' '}
-          <span className="key">alt+1–{MODEMS.length}</span> mode <span className="key">alt+f</span> file{' '}
+          <span className="key">alt+1–{MODES.length}</span> mode <span className="key">alt+f</span> file{' '}
           <span className="key">alt+r</span> resend <span className="key">alt+t</span> test
         </span>
         <span className="spacer" />

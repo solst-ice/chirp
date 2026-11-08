@@ -5,8 +5,8 @@ This application transmits and receives text and small files through sound: one 
 ## Features
 
 - Send text (any UTF-8, including lowercase and emoji) and small files through sound
-- Three modes: **FAST** (~320 bit/s), **ROBUST** (~85 bit/s, for noisy or echoey rooms) and **INAUDIBLE** (~65 bit/s, near-ultrasonic 18–19 kHz)
-- The receiver listens for all three modes at once
+- Four modes: **FAST** (~320 bit/s), **ROBUST** (~85 bit/s, for noisy or echoey rooms), **INAUDIBLE** (~65 bit/s, near-ultrasonic 18–19 kHz) and **ENCRYPTED** (~270 bit/s: FAST tones, every frame sealed with a pre-shared key)
+- The receiver listens for all of them at once
 - Error correction (Reed–Solomon) plus a CRC-32 checksum: text appears as it arrives, and a message only counts as received once it passes its checksum. Frames that are too damaged are reported as corrupted, but a transmission the receiver never detects (too quiet, too far, drowned out) leaves no trace
 - Transmission is one-way broadcast: there are no acknowledgments, so the sender cannot tell whether anyone received it. The log marks messages "sent", and its startup line reads "ready · one-way send · auto-receive"
 - Cancel any transmission (ESC), resend files to fill gaps, and a loopback TEST that checks whether a device can hear its own signal in the selected mode
@@ -20,7 +20,8 @@ The modem lives in [`src/modem/`](src/modem/):
 2. **Modulation (multi-tone FSK)**: every symbol sounds one tone per group; each group picks one of 16 tones, carrying 4 bits. Even and odd symbols use two interleaved tone sets so room echoes of the previous symbol land on tones the receiver ignores. Short raised-cosine ramps between symbols avoid clicks.
 3. **Reception**: an `AudioWorklet` streams raw microphone samples to the demodulators, which use the sample count as their clock rather than timers or screen refreshes. Whether a browser keeps capturing audio in a background tab varies (see Notes). They slide a window looking for the preamble, refine the timing, then read each symbol at its known position while an early/late tracker follows clock drift between devices. Low-confidence bytes are retried as erasures during error correction.
 4. **Files**: a manifest frame (name, size, checksum) followed by numbered chunk frames, compressed with deflate when that helps. The manifest is repeated at the end, and **RESEND** reuses the 32-bit file id so a receiver can fill in chunks it missed. Receivers validate manifests against hard limits (256 KB, consistent chunk counts and exact chunk lengths) before allocating anything, cap decompression at the declared size, and keep at most eight incomplete transfers. Chunks that arrive before their manifest are held within the same budgets (no more than the largest valid file per transfer, 1 MB across all of them), and transfers that go quiet for ten minutes are dropped.
-5. **Transmitting**: one transmission at a time, cancellable, and it waits for any frame currently being received to finish before talking (listen before talk). Transfers longer than 15 minutes of airtime are refused.
+5. **Encryption** ([`encryption.ts`](src/modem/encryption.ts)): in ENCRYPTED mode each frame is sealed on its own before modulation, so file chunks can still be opened in any order and RESEND still fills gaps. See Security below.
+6. **Transmitting**: one transmission at a time, cancellable, and it waits for any frame currently being received to finish before talking (listen before talk). Transfers longer than 15 minutes of airtime are refused.
 
 The wire format is pinned by known-answer tests (`test/wireFormat.test.ts`); it is not compatible with the earlier character-per-tone version of Chirp, so both devices need this version.
 
@@ -29,12 +30,22 @@ The wire format is pinned by known-answer tests (`test/wireFormat.test.ts`); it 
 | FAST | 4 at a time | 1.5–7.9 kHz | 533 bit/s | ~2.5 s |
 | ROBUST | 2 at a time | 1.5–4.7 kHz | 133 bit/s | ~9 s |
 | INAUDIBLE | 1 at a time | 18–19 kHz | 100 bit/s | ~12.5 s |
+| ENCRYPTED | as FAST | as FAST | 533 bit/s | ~3 s (34 bytes of overhead per frame) |
 
 INAUDIBLE is near-ultrasonic, not ultrasonic, and device-dependent: a 44.1/48 kHz sample rate does not guarantee that a phone or laptop speaker and microphone actually reproduce 18–19 kHz. Run the loopback TEST on each device first. It uses a single tone at a time because two simultaneous high tones can produce an audible difference tone through a small speaker, it will not work over Bluetooth speakers or headsets, and some young people (and most pets) can still hear it.
 
 ### Security
 
-The checksum proves the data was not damaged in transit, not who sent it: anyone within earshot can transmit, and anyone within earshot can listen. Nothing is encrypted. Received text is displayed as plain text and received files are offered only as downloads (`application/octet-stream`), never opened in the page.
+In FAST, ROBUST and INAUDIBLE nothing is encrypted: the checksum proves the data was not damaged in transit, not who sent it, and anyone within earshot can transmit or listen. Received text is displayed as plain text and received files are offered only as downloads (`application/octet-stream`), never opened in the page.
+
+**ENCRYPTED** mode seals every frame with AES-256-GCM under a key derived from a pre-shared passphrase (PBKDF2-SHA256, 600,000 iterations, fixed salt). Each frame's payload is `version | 12-byte random nonce | ciphertext of (real frame type | unix time | data) | 16-byte tag`, 34 bytes more than the data it carries.
+
+- **What it protects:** message text, file contents, file names and types, and whether a frame is text or part of a file. Only someone with the same passphrase can read a frame, and a frame that was altered, or sealed with a different key, is refused.
+- **What it does not hide:** that a transmission happened, when, in which mode, and how long it was.
+- **The passphrase is the whole defence.** Anyone who records a transmission can guess passphrases offline, at leisure. Use 5 or more random, unrelated words (20+ characters) and agree on it in person, never over chirp. Everyone who knows it can read every message and can send messages that look genuine; there is no sender identity beyond "knows the key".
+- **Replays:** a receiver refuses frames stamped more than 30 minutes away from its own clock (so both devices' clocks must roughly agree), and ignores frames it has already opened in this session.
+- **No forward secrecy:** if the passphrase leaks later, recordings of earlier transmissions can be decrypted.
+- The passphrase is kept in memory only and forgotten when the tab closes. A receiver uses it for any encrypted frame it hears, whichever mode is selected for sending. Encryption needs a secure page (https or localhost). The loopback TEST is never encrypted.
 
 ## Getting Started
 

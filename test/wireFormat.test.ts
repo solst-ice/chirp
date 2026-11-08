@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 import { crc32 } from '../src/modem/crc32.ts';
+import { deriveKey, encryptFrame } from '../src/modem/encryption.ts';
 import { buildFileFrames } from '../src/modem/fileTransfer.ts';
 import { frameBytes, frameTones } from '../src/modem/mfsk.ts';
 import { PROFILES } from '../src/modem/profiles.ts';
@@ -84,5 +85,15 @@ describe('known-answer vectors', () => {
         [FrameType.FileManifest, manifest],
       ],
     );
+  });
+
+  test('encrypted frame (version 1) is unchanged', async () => {
+    // Independently reproducible: PBKDF2-SHA256(passphrase, "chirp/psk/v1", 600000) → AES-256-GCM, AAD = version byte.
+    const key = await deriveKey('otter velvet canyon lamp orbit');
+    const nonce = Uint8Array.from({ length: 12 }, (_, i) => i);
+    const sealed = await encryptFrame(key, frame, { nonce, now: Date.UTC(2026, 10, 7, 12) });
+    // Version | nonce | ciphertext of (type | unix seconds | "Hi ✓") | tag.
+    assert.equal(sealed.type, FrameType.Encrypted);
+    assert.equal(hex(sealed.payload), '01' + '000102030405060708090a0b' + '7501ebb815bd9cadf31c86' + '893b3b651bfdbc5298d9a7f4b6603ce3');
   });
 });
