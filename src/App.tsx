@@ -132,6 +132,14 @@ interface FileLine {
   stale: boolean;
 }
 
+/** The last file sent, for RESEND. `keyContext` is the key it was sealed under, by counter, never the key itself. */
+interface LastFile {
+  file: File;
+  fileId: number;
+  modemId: string;
+  keyContext: number;
+}
+
 interface LockedLine {
   lineId: number;
   note: string;
@@ -220,7 +228,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-const fileLineKey = (encrypted: boolean, fileId: number) => `${encrypted ? 'sealed' : 'plain'}:${fileId}`;
+const SEALED_LINE = 'sealed:';
+const fileLineKey = (encrypted: boolean, fileId: number) => `${encrypted ? SEALED_LINE : 'plain:'}${fileId}`;
 
 const AudioContextClass: typeof AudioContext =
   window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -330,7 +339,7 @@ function App() {
   const [stats, setStats] = useState<Record<string, ModemStats>>({});
   const [lastTx, setLastTx] = useState<{ mode: string; bytes: number; duration: number } | null>(null);
   const [lastRx, setLastRx] = useState<{ mode: string; marginDb: number; corrected: number } | null>(null);
-  const [lastFile, setLastFile] = useState<{ file: File; fileId: number; modemId: string } | null>(null);
+  const [lastFile, setLastFile] = useState<LastFile | null>(null);
   const [announcement, setAnnouncement] = useState('');
   // Open where there's room; on phones and short windows the composer below the spectrum comes first.
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => window.matchMedia('(min-width: 901px) and (min-height: 800px)').matches);
@@ -338,7 +347,8 @@ function App() {
   // Kept in memory only: never stored, so closing the tab forgets it.
   const [psk, setPsk] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  // Whether the key was filled in by GENERATE and not edited since. A flag, so no second copy of the secret is kept.
+  const [keyGenerated, setKeyGenerated] = useState(false);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -361,13 +371,16 @@ function App() {
   const stickToBottomRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // The normalised key; written only by changeKey.
   const pskRef = useRef('');
+  // Goes up whenever the key changes. Encrypted transfers, RESEND's file id and decryptions in flight belong
+  // to the key context they started in, so frames sealed under different keys are never combined.
+  const keyContextRef = useRef(0);
   const replayGuardRef = useRef(new ReplayGuard());
   const lockedLineRef = useRef<LockedLine | null>(null);
 
   modeRef.current = modeId;
   micRef.current = mic;
-  pskRef.current = normalizeKey(psk);
   const mode = getMode(modeId);
   const modem = mode.modem;
   const txBusy = txState.kind !== 'idle';
@@ -570,6 +583,7 @@ function App() {
 
   const openFrame = async (payload: Uint8Array) => {
     const passphrase = pskRef.current;
+    const context = keyContextRef.current;
     if (!passphrase) {
       noteLocked(`select ${ENCRYPTED_LABEL}, enter the pre-shared key, then ask the sender to resend`);
       return;
@@ -578,9 +592,11 @@ function App() {
     try {
       result = await decryptFrame(await deriveKey(passphrase), payload);
     } catch (err) {
-      noteLocked(errorText(err));
+      if (keyContextRef.current === context) noteLocked(errorText(err));
       return;
     }
+    // The key changed or was cleared while this frame was being opened: it belongs to the old key.
+    if (keyContextRef.current !== context) return;
     if (!result.ok) {
       noteLocked(unopenedNote(result));
       return;
@@ -787,7 +803,7 @@ function App() {
   const sendTextRef = useRef(sendText);
   sendTextRef.current = sendText;
 
-  const sendFile = async (file: File, reuse?: { fileId: number; modemId: string }) => {
+  const sendFile = async (file: File, reuse?: LastFile) => {
     if (transmitter.busy) {
       addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
       return;
@@ -795,6 +811,7 @@ function App() {
     const mode = getMode(modeRef.current);
     const m = mode.modem;
     const passphrase = pskRef.current;
+    const keyContext = keyContextRef.current;
     if (mode.encrypted && !passphrase) {
       addLine({ tag: 'err', mode: m.label, text: file.name, note: 'not sent · enter a pre-shared key first' });
       return;
@@ -812,7 +829,9 @@ function App() {
         const raw = new Uint8Array(await file.arrayBuffer());
         const { data, compressed } = await maybeCompress(raw);
         if (signal.aborted) return null;
-        const fileId = reuse && reuse.modemId === mode.id ? reuse.fileId : newFileId();
+        // A changed key starts a new transfer: receivers assemble each key's frames apart.
+        const sameContext = reuse && reuse.modemId === mode.id && (!mode.encrypted || reuse.keyContext === keyContext);
+        const fileId = reuse && sameContext ? reuse.fileId : newFileId();
         const build = (target: { rawBitRate: number; maxPayload: number }) =>
           buildFileFrames({
             fileId,
@@ -845,7 +864,7 @@ function App() {
         const played = mode.encrypted ? await sealAll(passphrase, frames) : frames;
         if (signal.aborted) return null;
         size = `${formatBytes(raw.length)}${compressed ? ` → ${formatBytes(data.length)} deflated` : ''}`;
-        setLastFile({ file, fileId, modemId: mode.id });
+        setLastFile({ file, fileId, modemId: mode.id, keyContext });
         lineId = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
         return { modem: m, frames: played };
       },
@@ -893,7 +912,7 @@ function App() {
       return;
     }
     // Chunk boundaries depend on the mode, so the id (which lets the receiver
-    // merge chunks) is only reused when the mode, encrypted or not, is unchanged.
+    // merge chunks) is only reused when the mode, encrypted or not, and the key are unchanged.
     void sendFile(lastFile.file, lastFile);
   };
 
@@ -945,6 +964,20 @@ function App() {
       });
       announce(`Loopback test failed for ${m.label}`);
     }
+  };
+
+  /** Every change of the key goes through here: a new key is a new key context. */
+  const changeKey = (next: string, generated: boolean) => {
+    setPsk(next);
+    setKeyGenerated(generated);
+    const normalized = normalizeKey(next);
+    if (normalized === pskRef.current) return;
+    pskRef.current = normalized;
+    keyContextRef.current++;
+    // Unfinished encrypted transfers belonged to the old key; their frames can't be combined with the new key's.
+    sealedAssemblerRef.current = new FileAssembler();
+    for (const key of [...fileLinesRef.current.keys()]) if (key.startsWith(SEALED_LINE)) dropFileLine(key, 'key changed');
+    if (!normalized) forgetKey();
   };
 
   const selectMode = (id: string) => {
@@ -1041,10 +1074,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!normalizeKey(psk)) {
-      forgetKey();
-      return;
-    }
+    if (!normalizeKey(psk)) return;
     const t = setTimeout(() => void deriveKey(psk).catch(() => undefined), KEY_WARMUP_MS);
     return () => clearTimeout(t);
   }, [psk]);
@@ -1076,7 +1106,6 @@ function App() {
   const overLimit = payloadBytes > mode.maxPayload;
   const keyChars = Array.from(normalizeKey(psk)).length;
   const keyMissing = mode.encrypted && keyChars === 0;
-  const keyGenerated = generatedKey !== null && psk === generatedKey;
   const keyHint =
     keyChars === 0
       ? 'needed to send · also opens encrypted messages you receive · kept in memory only'
@@ -1285,7 +1314,7 @@ function App() {
                   autoCapitalize="none"
                   autoCorrect="off"
                   aria-describedby="psk-meta"
-                  onChange={(e) => setPsk(e.target.value)}
+                  onChange={(e) => changeKey(e.target.value, false)}
                   onKeyDown={(e) => {
                     // Enter that confirms an IME composition must not move on.
                     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -1296,26 +1325,27 @@ function App() {
                   }}
                   placeholder="type a 20+ character key, same on both devices"
                 />
-                <button className="btn btn-inline" onClick={() => setShowKey((v) => !v)}>
+              </div>
+              <div id="psk-meta" className={`tx-meta${!keyGenerated && keyChars > 0 && keyChars < MIN_KEY_CHARS ? ' warn' : ''}`}>
+                {keyHint}
+              </div>
+              {/* A row of their own, so the key gets the full width and a generated key can be read out in one go. */}
+              <div className="actions key-actions">
+                <button className="btn" onClick={() => setShowKey((v) => !v)}>
                   [ {showKey ? 'HIDE' : 'SHOW'} ]
                 </button>
                 <button
-                  className="btn btn-inline"
+                  className="btn"
                   disabled={txBusy}
                   title="Fill in a random 25-character key"
                   onClick={() => {
-                    const key = generateKey();
-                    setPsk(key);
-                    setGeneratedKey(key);
+                    changeKey(generateKey(), true);
                     // It has to be read out to the other device.
                     setShowKey(true);
                   }}
                 >
                   [ GENERATE ]
                 </button>
-              </div>
-              <div id="psk-meta" className={`tx-meta${!keyGenerated && keyChars > 0 && keyChars < MIN_KEY_CHARS ? ' warn' : ''}`}>
-                {keyHint}
               </div>
             </>
           )}

@@ -394,11 +394,6 @@
   color: var(--dim);
 }
 
-.prompt .btn-inline {
-  flex: none;
-  padding: 0;
-}
-
 .tx-meta {
   color: var(--dim);
   margin: 4px 0 8px;
