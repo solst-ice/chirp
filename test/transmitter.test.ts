@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { getModem } from '../src/modem/profiles.ts';
 import { FrameType, type Frame, type Modem } from '../src/modem/types.ts';
-import { TURNAROUND_MS, Transmitter, type TransmitterDeps, type TxState } from '../src/transfer/transmitter.ts';
+import { FRAME_GAP_MS, TURNAROUND_MS, Transmitter, holdoffAfter, type TransmitterDeps, type TxState } from '../src/transfer/transmitter.ts';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const text = (s: string): Frame => ({ type: FrameType.Text, payload: new TextEncoder().encode(s) });
@@ -35,7 +35,7 @@ function harness(opts: { playMs?: number; channelBusyFor?: number; clock?: () =>
       return { done, stop: () => (log.stopped++, finish()) };
     },
     channelBusy: () => Date.now() < busyUntil,
-    quietMs: () => (opts.heardAgoMs === undefined ? Infinity : Date.now() - heardAt),
+    lastHeard: () => (opts.heardAgoMs === undefined ? null : { agoMs: Date.now() - heardAt, modem: getModem('fast') }),
     beforeAudio: () => void log.before++,
     afterAudio: async () => void log.after++,
     onState: (s) => {
@@ -176,10 +176,16 @@ describe('transmitter', () => {
     assert.equal(log.before, log.after);
     assert.equal(tx.busy, false);
   });
-  test('waits out the turnaround after hearing another device, so it is listening again', async () => {
+  test('after hearing a frame, stays quiet long enough to notice the next frame of the same transfer', async () => {
+    const fast = getModem('fast');
+    // The next frame starts after the frame gap and is noticed once its header is in.
+    assert.ok(holdoffAfter(fast) > FRAME_GAP_MS + fast.headerSeconds * 1000);
+    assert.ok(holdoffAfter(fast) >= TURNAROUND_MS);
+    // Slower modes take longer to recognise, so they hold off longer.
+    assert.ok(holdoffAfter(getModem('inaudible')) > holdoffAfter(fast) + 500);
     const { tx } = harness({ heardAgoMs: 0 });
     const started = Date.now();
-    assert.equal((await tx.run('a', job(getModem('fast'), [text('x')]))).status, 'sent');
-    assert.ok(Date.now() - started >= TURNAROUND_MS - 10, `${Date.now() - started} ms`);
+    assert.equal((await tx.run('a', job(fast, [text('x')]))).status, 'sent');
+    assert.ok(Date.now() - started >= holdoffAfter(fast) - 10, `${Date.now() - started} ms`);
   });
 });

@@ -265,4 +265,43 @@ describe('two-way sessions', () => {
     const late = await a.manager.seal(first, text('late')).catch(() => null);
     assert.ok(late, 'a retired session can still seal what was already prepared');
   });
+  test('NEW SESSION can be pressed again and again: every new session works', async () => {
+    const r = room();
+    const a = r.add('a');
+    const b = r.add('b');
+    for (let i = 0; i < 12; i++) {
+      a.manager.renew();
+      const session = await a.manager.establish(r.say('a'), job());
+      const opened = await b.manager.open((await a.manager.seal(session, text(`round ${i}`))).payload);
+      assert.ok(opened.ok, `round ${i}: ${JSON.stringify(opened)}`);
+      // And the answering side sends in the newest one.
+      assert.equal(b.manager.current()?.id, session.id);
+    }
+  });
+
+  test('a flood of stray hellos cannot push out an established session', async () => {
+    const r = room();
+    const a = r.add('a');
+    const b = r.add('b');
+    const session = await a.manager.establish(r.say('a'), job());
+    assert.ok((await b.manager.open((await a.manager.seal(session, text('before'))).payload)).ok);
+    for (let i = 0; i < 30; i++) await b.manager.onHandshake(helloFrame((await createEphemeral()).publicKey).payload);
+    assert.equal(b.manager.current()?.id, session.id);
+    assert.ok((await b.manager.open((await a.manager.seal(session, text('after'))).payload)).ok);
+  });
+
+  test('retired sessions stop opening frames once nothing sent in them can still arrive', async () => {
+    let now = Date.UTC(2026, 10, 8, 12);
+    const r = room({ now: () => now });
+    const a = r.add('a');
+    const b = r.add('b');
+    const session = await a.manager.establish(r.say('a'), job());
+    const late = await a.manager.seal(session, text('late'));
+    assert.ok((await b.manager.open((await a.manager.seal(session, text('confirm'))).payload)).ok);
+    b.manager.renew();
+    now += 19 * 60_000;
+    assert.ok((await b.manager.open(late.payload)).ok);
+    now += 2 * 60_000;
+    assert.deepEqual(await b.manager.open((await a.manager.seal(session, text('later'))).payload), { ok: false, reason: 'session' });
+  });
 });

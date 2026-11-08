@@ -173,6 +173,7 @@ export function createMfskModem(p: MfskProfile): Modem {
     maxPayload: p.maxPayload,
     supports: (sampleRate) => toneFrequency(p, bins) < sampleRate * 0.46,
     airtime: (length) => LEAD_IN_SECONDS + (PREAMBLE.length + layout(p, length).symbols) * period + TAIL_SECONDS,
+    headerSeconds: LEAD_IN_SECONDS + (PREAMBLE.length + Math.ceil(HEADER_NIBBLES / p.groups)) * period,
 
     modulate(frame, sampleRate) {
       const tones = frameTones(p, frame);

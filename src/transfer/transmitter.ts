@@ -17,12 +17,23 @@ export const FRAME_GAP_MS = 120;
 /** After transmitting, a device ignores its own microphone this long, so it does not decode its echo. */
 export const ECHO_SETTLE_MS = 150;
 /**
- * Listen before talk also waits this long after the last frame heard from
- * another device: that device ignores its microphone for ECHO_SETTLE_MS after
- * it stops playing, so an immediate answer (a handshake reply, data after a
- * reply) would lose its start. Covers its output latency and our decoding too.
+ * Listen before talk also waits at least this long after the last frame heard
+ * from another device: that device ignores its microphone for ECHO_SETTLE_MS
+ * after it stops playing, so an immediate answer (a handshake reply, data
+ * after a reply) would lose its start. Covers its output latency and our decoding too.
  */
 export const TURNAROUND_MS = 400;
+/** Slack for audio buffering and decoding, on top of a frame's own header time. */
+const DETECT_MARGIN_MS = 150;
+
+/**
+ * How long to stay quiet after a frame of this modem ends. Besides the
+ * turnaround, the sender may be in the middle of a transfer: its next frame
+ * starts FRAME_GAP_MS later and is only noticed once its header is in, so
+ * talking any sooner would land on top of it.
+ */
+export const holdoffAfter = (modem: Pick<Modem, 'headerSeconds'>) =>
+  Math.max(TURNAROUND_MS, FRAME_GAP_MS + modem.headerSeconds * 1000 + DETECT_MARGIN_MS);
 const CHANNEL_POLL_MS = 100;
 const MAX_CHANNEL_WAIT_MS = 120_000;
 const PROGRESS_MS = 100;
@@ -86,8 +97,8 @@ export interface TransmitterDeps {
   play(samples: Float32Array): Playback;
   /** True while a frame from another device is being received. */
   channelBusy(): boolean;
-  /** Milliseconds since a frame from another device was last heard (Infinity if never). */
-  quietMs?(): number;
+  /** The last frame heard from another device: how long ago it ended (ms) and on which modem. */
+  lastHeard?(): { agoMs: number; modem: Pick<Modem, 'headerSeconds'> } | null;
   /** Called just before the first frame plays. */
   beforeAudio(monitor: boolean): void;
   /** Called once after audio stops (finished, cancelled or failed); may wait for echoes. */
@@ -212,11 +223,16 @@ export class Transmitter {
     if (!modem.supports(rate)) throw new Error(`${modem.label} mode is not available at ${rate} Hz`);
 
     const waitStarted = Date.now();
-    const turnaround = () => TURNAROUND_MS - (this.deps.quietMs?.() ?? Infinity);
-    while ((this.deps.channelBusy() || turnaround() > 0) && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
+    // Milliseconds of quiet still owed after the last frame heard (0 if none).
+    const holdoff = () => {
+      const heard = this.deps.lastHeard?.();
+      return heard ? Math.max(0, holdoffAfter(heard.modem) - heard.agoMs) : 0;
+    };
+    while ((this.deps.channelBusy() || holdoff() > 0) && Date.now() - waitStarted < MAX_CHANNEL_WAIT_MS && !signal.aborted) {
+      // Shown as waiting only while a frame is actually arriving, not for the short hold-off.
       const busy = this.deps.channelBusy();
       if (busy) this.deps.onState({ kind: 'waiting', label, modem: modem.label });
-      await sleep(busy ? CHANNEL_POLL_MS : Math.min(CHANNEL_POLL_MS, Math.max(1, turnaround())), signal);
+      await sleep(busy ? CHANNEL_POLL_MS : Math.min(CHANNEL_POLL_MS, Math.max(1, holdoff())), signal);
     }
     if (signal.aborted) return;
 

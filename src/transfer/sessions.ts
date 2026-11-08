@@ -43,7 +43,15 @@ export const SESSION_REUSE_MS = 40 * 60_000;
 export const HELLO_ATTEMPTS = 3;
 /** Handshakes started over after losing a tie before giving up. */
 const MAX_ROUNDS = 3;
-const MAX_SESSIONS = 8;
+/**
+ * Kept apart, so neither crowds out the other: confirmed sessions (one per
+ * device we talk to, plus a few renewed ones), and unconfirmed ones, which
+ * anyone can create with a hello and so may only ever displace each other.
+ */
+const MAX_CONFIRMED = 8;
+const MAX_UNCONFIRMED = 8;
+/** A retired session opens frames this long after renew(): the longest transfer (15 min) and its channel wait (2 min), with room. */
+const RETIRED_TTL_MS = 20 * 60_000;
 /** A repeated hello within this long gets the same reply again. */
 const ANSWER_CACHE_MS = 2 * 60_000;
 /** How long a finished handshake is remembered, to notice a second device answering it. */
@@ -61,8 +69,8 @@ export interface Session {
   confirmedAt?: number;
   /** Nonces already opened, so a replay within the session is noticed. */
   seen: Set<string>;
-  /** Set by renew(): still opens frames, but no longer sent in. */
-  retired?: boolean;
+  /** When renew() retired it: it still opens frames for a while, but is no longer sent in. */
+  retiredAt?: number;
 }
 
 export interface SessionInfo {
@@ -185,7 +193,8 @@ export class SessionManager {
    * turned two-way off and on). Frames still arriving in them open.
    */
   renew() {
-    for (const s of this.sessions.values()) s.retired = true;
+    const now = this.now();
+    for (const s of this.sessions.values()) s.retiredAt ??= now;
     this.changed();
   }
 
@@ -199,7 +208,9 @@ export class SessionManager {
   /** Drop sessions past their lifetime. */
   expire() {
     const now = this.now();
-    for (const [id, s] of this.sessions) if (now - s.createdAt >= SESSION_TTL_MS) this.sessions.delete(id);
+    for (const [id, s] of this.sessions) {
+      if (now - s.createdAt >= SESSION_TTL_MS || (s.retiredAt !== undefined && now - s.retiredAt >= RETIRED_TTL_MS)) this.sessions.delete(id);
+    }
     for (const [k, a] of this.answered) if (now - a.at >= ANSWER_CACHE_MS) this.answered.delete(k);
     for (const [k, c] of this.completed) if (now - c.at >= COMPLETED_MS) this.completed.delete(k);
     this.changed();
@@ -209,7 +220,7 @@ export class SessionManager {
     const now = this.now();
     let best: Session | null = null;
     for (const s of this.sessions.values()) {
-      if (s.confirmedAt === undefined || s.retired || now - s.createdAt >= SESSION_REUSE_MS) continue;
+      if (s.confirmedAt === undefined || s.retiredAt !== undefined || now - s.createdAt >= SESSION_REUSE_MS) continue;
       if (!best || s.confirmedAt > best.confirmedAt!) best = s;
     }
     return best;
@@ -225,12 +236,24 @@ export class SessionManager {
 
   private add(session: Session) {
     this.sessions.set(session.id, session);
-    while (this.sessions.size > MAX_SESSIONS) {
-      // Unconfirmed sessions go first: anyone can create one with a hello.
-      const victim = [...this.sessions.values()].sort((a, b) => Number(!!a.confirmedAt) - Number(!!b.confirmedAt) || a.createdAt - b.createdAt)[0];
-      this.sessions.delete(victim.id);
-    }
+    this.trim();
     this.changed();
+  }
+
+  /**
+   * Enforce the two limits. A new unconfirmed session only ever pushes out
+   * the oldest unconfirmed one, so hellos cannot evict an established session;
+   * once a session is confirmed, it pushes out the oldest confirmed one,
+   * retired sessions first.
+   */
+  private trim() {
+    const all = [...this.sessions.values()];
+    const unconfirmed = all.filter((s) => s.confirmedAt === undefined).sort((a, b) => a.createdAt - b.createdAt);
+    for (const s of unconfirmed.slice(0, Math.max(0, unconfirmed.length - MAX_UNCONFIRMED))) this.sessions.delete(s.id);
+    const confirmed = all
+      .filter((s) => s.confirmedAt !== undefined)
+      .sort((a, b) => Number(b.retiredAt !== undefined) - Number(a.retiredAt !== undefined) || a.confirmedAt! - b.confirmedAt!);
+    for (const s of confirmed.slice(0, Math.max(0, confirmed.length - MAX_CONFIRMED))) this.sessions.delete(s.id);
   }
 
   private check(generation: number) {
@@ -446,6 +469,7 @@ export class SessionManager {
     session.seen.add(result.nonce);
     if (session.confirmedAt === undefined) {
       session.confirmedAt = this.now();
+      this.trim();
       this.changed();
     }
     return { ok: true, frame: result.frame, session: id };

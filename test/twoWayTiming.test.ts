@@ -11,16 +11,11 @@ import { deriveKeys } from '../src/modem/encryption.ts';
 import { getModem } from '../src/modem/profiles.ts';
 import { FrameType, type Frame, type Modem } from '../src/modem/types.ts';
 import { SessionManager, type SessionDeps } from '../src/transfer/sessions.ts';
-import { ECHO_SETTLE_MS, TURNAROUND_MS, Transmitter } from '../src/transfer/transmitter.ts';
+import { ECHO_SETTLE_MS, Transmitter, holdoffAfter } from '../src/transfer/transmitter.ts';
 
 const PASSPHRASE = 'otter velvet canyon lamp orbit';
 const RATE = 48000;
-// Airtime runs at half speed of real FAST tones, to keep the test short; the delays that decide
-// whether a frame is heard (echo settling, turnaround) are real.
-const SCALE = 0.5;
 const LATENCY_MS = 40;
-/** Preamble (8 symbols) and header (5 symbols) of a FAST frame, at the test's speed. */
-const DETECT_MS = 13 * 30 * SCALE;
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const now = () => performance.now();
@@ -32,27 +27,35 @@ interface Sound {
   end: number;
 }
 
-function room(options: Partial<SessionDeps> = {}, o: { turnaround?: boolean } = {}) {
+/**
+ * `scale` speeds up airtime (and with it header time) to keep a test short;
+ * 1 is real FAST tones. Echo settling, turnaround and frame gaps stay real.
+ * `turnaround: false` removes the hold-off after hearing a frame, as before the fix.
+ */
+function room(o: { scale?: number; turnaround?: boolean; deps?: Partial<SessionDeps> } = {}) {
+  const scale = o.scale ?? 1;
   const air: Sound[] = [];
   const frameOf = new WeakMap<Float32Array, Frame>();
   const carrier = getModem('fast');
   const modem: Modem = {
     ...carrier,
     supports: () => true,
-    airtime: (length) => carrier.airtime(length) * SCALE,
+    airtime: (length) => carrier.airtime(length) * scale,
+    headerSeconds: carrier.headerSeconds * scale,
     modulate(frame) {
-      const samples = new Float32Array(Math.round(carrier.airtime(frame.payload.length) * SCALE * RATE));
+      const samples = new Float32Array(Math.round(carrier.airtime(frame.payload.length) * scale * RATE));
       frameOf.set(samples, frame);
       return samples;
     },
   };
-
+  const detectMs = modem.headerSeconds * 1000;
   const devices = new Map<string, ReturnType<typeof device>>();
 
   const device = (name: string) => {
     const muted: [number, number][] = [];
     const received: string[] = [];
     const lost: Frame[] = [];
+    const listeners: ((text: string) => void)[] = [];
     const heardAt = (s: Sound) => [s.start + LATENCY_MS, s.end + LATENCY_MS] as const;
     const tx = new Transmitter({
       sampleRate: () => RATE,
@@ -71,9 +74,13 @@ function room(options: Partial<SessionDeps> = {}, o: { turnaround?: boolean } = 
       channelBusy: () =>
         air.some((s) => {
           const [from, to] = heardAt(s);
-          return s.from !== name && now() >= from + DETECT_MS && now() <= to;
+          return s.from !== name && now() >= from + detectMs && now() <= to;
         }),
-      quietMs: () => (o.turnaround === false ? Infinity : now() - Math.max(-Infinity, ...air.filter((s) => s.from !== name && heardAt(s)[1] <= now()).map((s) => heardAt(s)[1]))),
+      lastHeard: () => {
+        if (o.turnaround === false) return null;
+        const ends = air.filter((s) => s.from !== name && heardAt(s)[1] <= now()).map((s) => heardAt(s)[1]);
+        return ends.length ? { agoMs: now() - Math.max(...ends), modem } : null;
+      },
       beforeAudio: () => void muted.push([now(), Infinity]),
       afterAudio: async () => {
         await delay(ECHO_SETTLE_MS);
@@ -83,16 +90,17 @@ function room(options: Partial<SessionDeps> = {}, o: { turnaround?: boolean } = 
     });
     const manager = new SessionManager({
       keys: () => deriveKeys(PASSPHRASE),
-      // As the app answers: only when the speaker is free, after the turnaround.
+      // As the app answers: only when the speaker is free; listen before talk adds the hold-off.
       answer(frame) {
         if (tx.busy) return false;
         void tx.run('answer', async () => ({ modem, frames: [frame] }));
         return true;
       },
-      replyTimeoutMs: TURNAROUND_MS + modem.airtime(58) * 1000 + 1500,
-      yieldBackoffMs: TURNAROUND_MS + 1200 * SCALE,
-      retryJitterMs: 600,
-      ...options,
+      // The same formulas as the app.
+      replyTimeoutMs: holdoffAfter(modem) + modem.airtime(58) * 1000 + 2500,
+      yieldBackoffMs: holdoffAfter(modem) + modem.headerSeconds * 1000 + 400,
+      retryJitterMs: 1500,
+      ...o.deps,
     });
     manager.setEnabled(true);
 
@@ -101,7 +109,7 @@ function room(options: Partial<SessionDeps> = {}, o: { turnaround?: boolean } = 
         if (other === s.from) continue;
         const [from, to] = heardAt(s);
         const deaf = d.muted.some(([a, b]) => a < to && b > from);
-        const collided = air.some((o) => o !== s && o.start + LATENCY_MS < to && o.end + LATENCY_MS > from);
+        const collided = air.some((x) => x !== s && x.start + LATENCY_MS < to && x.end + LATENCY_MS > from);
         if (deaf || collided) {
           d.lost.push(s.frame);
           continue;
@@ -109,19 +117,27 @@ function room(options: Partial<SessionDeps> = {}, o: { turnaround?: boolean } = 
         if (s.frame.type === FrameType.Handshake) void d.manager.onHandshake(s.frame.payload);
         else
           void d.manager.open(s.frame.payload).then((r) => {
-            if (r.ok) d.received.push(new TextDecoder().decode(r.frame.payload));
+            if (!r.ok) return;
+            const text = new TextDecoder().decode(r.frame.payload);
+            d.received.push(text);
+            for (const l of d.listeners) l(text);
           });
       }
     };
 
-    const send = (text: string) =>
+    /** Send `frames` text frames in one job, like a file transfer: `${label}1`, `${label}2`, … */
+    const send = (label: string, frames = 1) =>
       tx.run('message', async (signal, ctx) => {
         const session = await manager.establish((frame, sig) => ctx.say(modem, [frame], sig), signal);
-        const frame = await manager.seal(session, { type: FrameType.Text, payload: new TextEncoder().encode(text) });
-        return { modem, frames: [frame] };
+        const sealed = [];
+        for (let i = 1; i <= frames; i++) {
+          const text = frames === 1 ? label : `${label}${i}`;
+          sealed.push(await manager.seal(session, { type: FrameType.Text, payload: new TextEncoder().encode(text) }));
+        }
+        return { modem, frames: sealed };
       });
 
-    return { name, tx, manager, muted, received, lost, send };
+    return { name, tx, manager, muted, received, lost, listeners, send };
   };
 
   const add = (name: string) => {
@@ -139,9 +155,11 @@ const settle = async (...devices: { tx: Transmitter }[]) => {
   await delay(LATENCY_MS + 50);
 };
 
+const range = (label: string, n: number) => Array.from({ length: n }, (_, i) => `${label}${i + 1}`);
+
 describe('two-way exchange, with microphone muting and playback timing', () => {
   test('the first message of a new session is heard', async () => {
-    const r = room();
+    const r = room({ scale: 0.5 });
     const a = r.add('a');
     const b = r.add('b');
     assert.equal((await a.send('first')).status, 'sent');
@@ -154,8 +172,8 @@ describe('two-way exchange, with microphone muting and playback timing', () => {
     assert.deepEqual(a.received, ['second']);
   });
 
-  test('without the turnaround, answers start while the other device is still muted, and nothing gets through', async () => {
-    const r = room({}, { turnaround: false });
+  test('without the hold-off, answers start while the other device is still muted, and nothing gets through', async () => {
+    const r = room({ scale: 0.5, turnaround: false });
     const a = r.add('a');
     const b = r.add('b');
     await a.send('first');
@@ -165,17 +183,38 @@ describe('two-way exchange, with microphone muting and playback timing', () => {
     assert.ok(a.lost.length > 0 && a.lost.every((f) => f.type === FrameType.Handshake));
   });
 
-  test('two devices sending at nearly the same time both get through', async () => {
+  test('at real speed, two devices sending multi-frame transfers at nearly the same time lose nothing', async () => {
     const r = room();
     const a = r.add('a');
     const b = r.add('b');
-    const first = a.send('from a');
+    const first = a.send('a', 4);
     // B starts once A's hello is recognisable, so it waits for the channel and the tie is decided.
-    await delay(LATENCY_MS + DETECT_MS + 60);
-    const second = b.send('from b');
+    await delay(LATENCY_MS + getModem('fast').headerSeconds * 1000 + 60);
+    const second = b.send('b', 4);
     assert.deepEqual([(await first).status, (await second).status], ['sent', 'sent']);
     await settle(a, b);
-    assert.deepEqual(b.received, ['from a']);
-    assert.deepEqual(a.received, ['from b']);
+    assert.deepEqual(b.received, range('a', 4));
+    assert.deepEqual(a.received, range('b', 4));
+    assert.deepEqual([...a.lost, ...b.lost], []);
+  });
+
+  test('at real speed, a send started between the frames of a transfer waits for the transfer to end', async () => {
+    const r = room();
+    const a = r.add('a');
+    const b = r.add('b');
+    assert.equal((await a.send('hello')).status, 'sent');
+    await settle(a, b);
+    // B already has the session, so its send goes straight to listen before talk, right in a frame gap.
+    let reply: ReturnType<typeof b.send> | undefined;
+    b.listeners.push((text) => {
+      if (text === 'a1') reply = b.send('reply');
+    });
+    assert.equal((await a.send('a', 4)).status, 'sent');
+    await settle(a, b);
+    assert.equal((await reply!).status, 'sent');
+    await settle(a, b);
+    assert.deepEqual(b.received, ['hello', ...range('a', 4)]);
+    assert.deepEqual(a.received, ['reply']);
+    assert.deepEqual([...a.lost, ...b.lost], []);
   });
 });

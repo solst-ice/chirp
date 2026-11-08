@@ -54,6 +54,8 @@ export interface Modem {
   supports(sampleRate: number): boolean;
   /** Seconds of audio `modulate` will produce for a payload of this many bytes. */
   airtime(payloadLength: number): number;
+  /** Seconds from the start of a frame until its header is decoded: when a listener can first tell the channel is busy. */
+  headerSeconds: number;
   modulate(frame: Frame, sampleRate: number): Float32Array;
   createDemodulator(sampleRate: number): Demodulator;
 }

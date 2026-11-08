@@ -28,7 +28,7 @@ import { MODEMS, getModem } from './modem/profiles';
 import { REPLY_BYTES, sessionIdOf } from './modem/session';
 import { FrameType, type DemodEvent, type Demodulator, type Frame, type Modem } from './modem/types';
 import { SessionManager, type SessionInfo, type SessionOpen } from './transfer/sessions';
-import { ECHO_SETTLE_MS, TURNAROUND_MS, Transmitter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
+import { ECHO_SETTLE_MS, Transmitter, holdoffAfter, airtimeOf, type PrepareContext, type SendingState, type TxState } from './transfer/transmitter';
 
 // Audio signal favicon SVG data - base64 encoded for direct use
 const AUDIO_FAVICON = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8cmVjdCB4PSIwIiB5PSIwIiB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIGZpbGw9IiMxMzEzMTMiLz4KICA8IS0tIFRocmVlIHNpZ25hbCBiYXJzIHdpdGggc29saWQgY29sb3JzIC0tPgogIDxyZWN0IHg9IjEyIiB5PSI0MiIgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiByeD0iMiIgZmlsbD0iI2ZmNDFiNCIvPiA8IS0tIFBpbmsgLS0+CiAgPHJlY3QgeD0iMjciIHk9IjMwIiB3aWR0aD0iMTAiIGhlaWdodD0iMjIiIHJ4PSIyIiBmaWxsPSIjMDBmZmFhIi8+IDwhLS0gR3JlZW4gLS0+CiAgPHJlY3QgeD0iNDIiIHk9IjE4IiB3aWR0aD0iMTAiIGhlaWdodD0iMzQiIHJ4PSIyIiBmaWxsPSIjMzE4NWZmIi8+IDwhLS0gQmx1ZSAtLT4KPC9zdmc+`;
@@ -88,10 +88,11 @@ const ENCRYPTED_MODE = getMode('encrypted');
 
 // How long a caller listens for a handshake reply: the answering device's delay
 // and the reply's airtime, plus room for decoding and a moment of channel wait.
-const REPLY_TIMEOUT_MS = Math.ceil(TURNAROUND_MS + ENCRYPTED_CARRIER.airtime(REPLY_BYTES) * 1000 + 2500);
-// After losing a tie, listen this long before calling again: the winner's turnaround, plus
-// the time it takes to recognise its data frame (preamble and header), plus a margin.
-const YIELD_BACKOFF_MS = TURNAROUND_MS + 1200;
+const REPLY_TIMEOUT_MS = Math.ceil(holdoffAfter(ENCRYPTED_CARRIER) + ENCRYPTED_CARRIER.airtime(REPLY_BYTES) * 1000 + 2500);
+// After losing a tie, listen this long before calling again: the winner's hold-off after our
+// reply, plus the time it takes to recognise its data frame, plus a margin. From then on its
+// transfer holds our hello back (listen before talk, which also covers the gaps between frames).
+const YIELD_BACKOFF_MS = Math.ceil(holdoffAfter(ENCRYPTED_CARRIER) + ENCRYPTED_CARRIER.headerSeconds * 1000 + 400);
 
 /** A session id as both screens show it, e.g. 3fa9-12c0. */
 const sessionCode = (id: string) => `${id.slice(0, 4)}-${id.slice(4)}`;
@@ -412,8 +413,8 @@ function App() {
   const replayGuardRef = useRef(new ReplayGuard());
   const lockedLineRef = useRef<LockedLine | null>(null);
   const twoWayRef = useRef(false);
-  // When a frame from another device last ended (performance.now), for listen before talk.
-  const lastHeardRef = useRef(-Infinity);
+  // When (performance.now) and on which modem a frame from another device last ended, for listen before talk.
+  const lastHeardRef = useRef<{ at: number; modemId: string } | null>(null);
 
   modeRef.current = modeId;
   micRef.current = mic;
@@ -491,7 +492,10 @@ function App() {
       clock: () => audioContextRef.current?.currentTime ?? performance.now() / 1000,
       play: (samples) => play(audioContextRef.current!, samples),
       channelBusy: () => receptionsRef.current.size > 0,
-      quietMs: () => performance.now() - lastHeardRef.current,
+      lastHeard: () => {
+        const heard = lastHeardRef.current;
+        return heard ? { agoMs: performance.now() - heard.at, modem: getModem(heard.modemId) } : null;
+      },
       beforeAudio: (monitor) => {
         mutedRef.current = !monitor;
         if (!monitor) abortReceptions('interrupted by our transmission');
@@ -717,7 +721,7 @@ function App() {
 
       case 'frame': {
         receptionsRef.current.delete(e.modemId);
-        if (e.frame.type !== FrameType.SelfTest) lastHeardRef.current = now;
+        if (e.frame.type !== FrameType.SelfTest) lastHeardRef.current = { at: now, modemId: e.modemId };
         setRxState(null);
         bumpStats(e.modemId, (s) => ({ frames: s.frames + 1, corrected: s.corrected + e.stats.correctedBytes }));
         const { frame } = e;
@@ -740,7 +744,7 @@ function App() {
 
       case 'error':
         receptionsRef.current.delete(e.modemId);
-        lastHeardRef.current = now;
+        lastHeardRef.current = { at: now, modemId: e.modemId };
         setRxState(null);
         bumpStats(e.modemId, (s) => ({ errors: s.errors + 1 }));
         if (reception?.lineId !== undefined) {
