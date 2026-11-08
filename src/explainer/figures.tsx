@@ -948,7 +948,7 @@ export function ModesFigure() {
 
 /* ── 7a · how long guessing takes ────────────────────── */
 
-// Roughly one of today's fastest graphics cards against PBKDF2-SHA256 at 600,000 rounds.
+// An assumed rate against PBKDF2-SHA256 at 600,000 rounds, for illustration; not a benchmark.
 const GUESSES_PER_SECOND = 15_000;
 const YEAR_S = 365.25 * 86400;
 const UNIVERSE_S = 13.8e9 * YEAR_S;
@@ -1025,12 +1025,12 @@ export function GuessFigure() {
         ))}
       </div>
       <figcaption>
-        An illustrative model, not a benchmark. It assumes about {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a
-        second, roughly one fast graphics card against {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds of PBKDF2, and shows
-        the average time to find the key; the hashed-once row simply multiplies that rate by{' '}
-        {PBKDF2_ITERATIONS.toLocaleString('en-US')}. Real phrases do worse than their bar: attackers try the likeliest first, so
-        a popular one can fall in seconds. Each step along the bars is ten times longer, and a thousand cards divide every time
-        by a thousand: the random words would still take {duration(words / 1000)}.
+        An illustrative model, not a benchmark. It assumes {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a second against{' '}
+        {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds of PBKDF2, and shows the average time to find the key; the hashed-once
+        row simply multiplies that rate by {PBKDF2_ITERATIONS.toLocaleString('en-US')}. Real phrases do worse than their bar:
+        attackers try the likeliest first, so a popular one can fall in seconds. Each step along the bars is ten times longer,
+        and a thousand times the guessing power divides every time by a thousand: the random words would still take{' '}
+        {duration(words / 1000)}.
       </figcaption>
     </figure>
   );
@@ -1049,14 +1049,59 @@ const SEAL_LABELS: Record<SealPart, string> = {
   tag: 'tag',
 };
 
-/** Where FLIP ONE BIT strikes: the ciphertext of the first text byte, or of the type byte when there is no text. */
-const flipIndex = (textBytes: number) => 13 + (textBytes ? 5 : 0);
-
 /** The key with its last character changed: the nearest wrong key. */
 function oneCharOff(key: string): string {
   const chars = Array.from(key);
   chars[chars.length - 1] = chars[chars.length - 1] === 'x' ? 'y' : 'x';
   return chars.join('');
+}
+
+/** One sealed frame and every way of opening it, worked out at once so the toggles only choose between them. */
+interface Sample {
+  text: string;
+  key: string;
+  inside: [SealPart, Uint8Array][];
+  sent: Uint8Array;
+  /** `sent` with one bit flipped: of the first text byte's ciphertext, or of the type byte's when there is no text. */
+  flipped: Uint8Array;
+  flipAt: number;
+  /** The opened text, or null when refused. */
+  opens: Record<'sent' | 'flipped', Record<'right' | 'wrong', string | null>>;
+}
+
+/** The app's own code throughout: PBKDF2, then AES-256-GCM with a fresh random nonce, as the app seals every frame. */
+async function sealSample(text: string, key: string): Promise<Sample> {
+  const normalized = normalizeKey(key);
+  const right = await deriveKey(normalized);
+  const wrong = await deriveKey(oneCharOff(normalized));
+  const sent = (await encryptFrame(right, { type: FrameType.Text, payload: enc.encode(text) })).payload;
+  const flipAt = 13 + (sent.length > ENCRYPTION_OVERHEAD ? 5 : 0);
+  const flipped = sent.slice();
+  flipped[flipAt] ^= 1;
+  const open = async (k: CryptoKey, bytes: Uint8Array) => {
+    const r = await decryptFrame(k, bytes);
+    return r.ok ? new TextDecoder().decode(r.frame.payload) : null;
+  };
+  const inside = await decryptFrame(right, sent);
+  if (!inside.ok) throw new Error('could not open its own frame');
+  const time = new Uint8Array(4);
+  new DataView(time.buffer).setUint32(0, inside.sentAt);
+  return {
+    text,
+    key,
+    inside: [
+      ['type', Uint8Array.of(inside.frame.type)],
+      ['time', time],
+      ['text', inside.frame.payload],
+    ],
+    sent,
+    flipped,
+    flipAt,
+    opens: {
+      sent: { right: await open(right, sent), wrong: await open(wrong, sent) },
+      flipped: { right: await open(right, flipped), wrong: await open(wrong, flipped) },
+    },
+  };
 }
 
 function SealRow({ label, parts, mark }: { label: string; parts: [SealPart, Uint8Array][]; mark?: number }) {
@@ -1083,93 +1128,37 @@ function SealRow({ label, parts, mark }: { label: string; parts: [SealPart, Uint
   );
 }
 
-type Keys = { right: CryptoKey; wrong: CryptoKey } | { error: string };
-
 export function SealFigure({ value, onChange }: { value: string; onChange: (s: string) => void }) {
   const [key, setKey] = useState(generateKey);
-  const [keys, setKeys] = useState<Keys | null>(null);
-  const [reseal, setReseal] = useState(0);
-  const [sealed, setSealed] = useState<{ payload: Uint8Array; inside: [SealPart, Uint8Array][] } | null>(null);
+  const [sample, setSample] = useState<Sample | null>(null);
+  const [sealing, setSealing] = useState(false);
+  const [error, setError] = useState('');
   const [wrongKey, setWrongKey] = useState(false);
   const [flip, setFlip] = useState(false);
-  const [opened, setOpened] = useState<string | null>(null);
-  const textBytes = enc.encode(value).length;
 
-  // The app's own code throughout. PBKDF2 is slow by design, so the keys wait for a pause in typing.
-  useEffect(() => {
-    let live = true;
-    const t = setTimeout(async () => {
-      try {
-        const normalized = normalizeKey(key);
-        const right = await deriveKey(normalized);
-        const wrong = await deriveKey(oneCharOff(normalized));
-        if (live) setKeys({ right, wrong });
-      } catch (err) {
-        if (live) setKeys({ error: err instanceof Error ? err.message : String(err) });
-      }
-    }, 250);
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
-  }, [key]);
+  const seal = async () => {
+    setSealing(true);
+    setError('');
+    try {
+      setSample(await sealSample(value, key));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSealing(false);
+    }
+  };
+  // Sealed once on arrival, so the figure isn't empty.
+  const sealRef = useRef(seal);
+  sealRef.current = seal;
+  useEffect(() => void sealRef.current(), []);
 
-  // Seal: a fresh random nonce every time, as the app does. A nonce must never seal two different texts.
-  useEffect(() => {
-    if (!keys || 'error' in keys) return;
-    let live = true;
-    void (async () => {
-      const frame = await encryptFrame(keys.right, { type: FrameType.Text, payload: enc.encode(value) });
-      // Opened once with the right key, to show what's inside.
-      const inside = await decryptFrame(keys.right, frame.payload);
-      if (!live || !inside.ok) return;
-      const time = new Uint8Array(4);
-      new DataView(time.buffer).setUint32(0, inside.sentAt);
-      setSealed({
-        payload: frame.payload,
-        inside: [
-          ['type', Uint8Array.of(inside.frame.type)],
-          ['time', time],
-          ['text', inside.frame.payload],
-        ],
-      });
-    })();
-    return () => {
-      live = false;
-    };
-  }, [keys, value, reseal]);
-
-  // What the receiver gets: that same sealed frame, never sealed again, with one bit flipped if asked.
-  const received = useMemo(() => {
-    if (!sealed || !flip) return sealed?.payload ?? null;
-    const altered = sealed.payload.slice();
-    altered[flipIndex(altered.length - ENCRYPTION_OVERHEAD)] ^= 1;
-    return altered;
-  }, [sealed, flip]);
-
-  useEffect(() => {
-    if (!keys || 'error' in keys || !received) return;
-    let live = true;
-    void decryptFrame(wrongKey ? keys.wrong : keys.right, received).then((r) => {
-      if (live) setOpened(r.ok ? new TextDecoder().decode(r.frame.payload) : null);
-    });
-    return () => {
-      live = false;
-    };
-  }, [keys, received, wrongKey]);
-
+  // A sample shows only while it matches the text and key on screen; after an edit, SEAL makes a new one.
+  const current = sample !== null && sample.text === value && sample.key === key ? sample : null;
+  const bytes = current && (flip ? current.flipped : current.sent);
+  const opened = current && current.opens[flip ? 'flipped' : 'sent'][wrongKey ? 'wrong' : 'right'];
   const refusal =
-    wrongKey && flip
-      ? 'the wrong key, and a flipped bit'
-      : wrongKey
-        ? "opened with the key's last character changed"
-        : 'one bit changed on the way';
-  const outside: [SealPart, Uint8Array][] | null = received && [
-    ['version', received.subarray(0, 1)],
-    ['nonce', received.subarray(1, 13)],
-    ['cipher', received.subarray(13, received.length - 16)],
-    ['tag', received.subarray(received.length - 16)],
-  ];
+    wrongKey && flip ? 'the wrong key, and a flipped bit' : wrongKey ? "opened with the key's last character changed" : 'one bit changed on the way';
+  const textBytes = enc.encode(value).length;
 
   return (
     <figure className="ex-figure">
@@ -1181,45 +1170,61 @@ export function SealFigure({ value, onChange }: { value: string; onChange: (s: s
         <span aria-hidden="true">#</span>
         <input value={key} spellCheck={false} autoCapitalize="none" aria-label="Pre-shared key" onChange={(e) => setKey(e.target.value)} />
       </label>
-      {keys && 'error' in keys ? (
-        <p className="ex-verdict err">{keys.error}</p>
-      ) : (
-        sealed &&
-        received &&
-        outside && (
-          <>
-            <SealRow label="inside: only key holders" parts={sealed.inside} />
-            <p className="ex-seal-arrow dim">↓ AES-256-GCM with the key, and a fresh nonce</p>
-            <SealRow label="on air: everyone hears" parts={outside} mark={flip ? flipIndex(received.length - ENCRYPTION_OVERHEAD) : undefined} />
-            <p className="ex-seal-legend">
-              {(['version', 'nonce', 'cipher', 'tag'] as const).map((part) => (
-                <span key={part} className={`seal-${part}`}>
-                  ■ {SEAL_LABELS[part]}
-                </span>
-              ))}
-            </p>
-            <div className="ex-controls">
-              <button className="btn" onClick={() => setReseal((n) => n + 1)}>
-                [ ↻ SEAL AGAIN ]
-              </button>
-              <button className={`btn${wrongKey ? ' btn-primary' : ''}`} aria-pressed={wrongKey} onClick={() => setWrongKey((w) => !w)}>
-                [ WRONG KEY ]
-              </button>
-              <button className={`btn${flip ? ' btn-primary' : ''}`} aria-pressed={flip} onClick={() => setFlip((f) => !f)}>
-                [ FLIP ONE BIT ]
-              </button>
-            </div>
-            <p className={`ex-verdict ${opened === null ? 'err' : 'ok'}`} role="status">
-              {opened === null ? `✗ refused: ${refusal}, so the tag no longer matches` : `✓ opens with this key: "${opened}"`}
-            </p>
-          </>
-        )
+      {current && bytes && (
+        <>
+          <SealRow label="inside: only key holders" parts={current.inside} />
+          <p className="ex-seal-arrow dim">↓ AES-256-GCM with the key, and a fresh nonce</p>
+          <SealRow
+            label="on air: everyone hears"
+            parts={[
+              ['version', bytes.subarray(0, 1)],
+              ['nonce', bytes.subarray(1, 13)],
+              ['cipher', bytes.subarray(13, bytes.length - 16)],
+              ['tag', bytes.subarray(bytes.length - 16)],
+            ]}
+            mark={flip ? current.flipAt : undefined}
+          />
+          <p className="ex-seal-legend">
+            {(['version', 'nonce', 'cipher', 'tag'] as const).map((part) => (
+              <span key={part} className={`seal-${part}`}>
+                ■ {SEAL_LABELS[part]}
+              </span>
+            ))}
+          </p>
+        </>
       )}
+      <div className="ex-controls">
+        <button className={`btn${current ? '' : ' btn-primary'}`} disabled={sealing} onClick={() => void seal()}>
+          [ {sealing ? 'SEALING…' : current ? '↻ SEAL AGAIN' : 'SEAL'} ]
+        </button>
+        <button
+          className={`btn${wrongKey ? ' btn-primary' : ''}`}
+          aria-pressed={wrongKey}
+          disabled={!current}
+          onClick={() => setWrongKey((w) => !w)}
+        >
+          [ WRONG KEY ]
+        </button>
+        <button className={`btn${flip ? ' btn-primary' : ''}`} aria-pressed={flip} disabled={!current} onClick={() => setFlip((f) => !f)}>
+          [ FLIP ONE BIT ]
+        </button>
+      </div>
+      <p className={`ex-verdict ${error || (current && opened === null) ? 'err' : current ? 'ok' : 'dim'}`} role="status">
+        {error
+          ? error
+          : !current
+            ? sealing
+              ? 'sealing…'
+              : 'press SEAL to seal this text with this key'
+            : opened === null
+              ? `✗ refused: ${refusal}, so the tag no longer matches`
+              : `✓ opens with this key: "${opened}"`}
+      </p>
       <figcaption>
         Computed in your browser by the app's own code. {textBytes} bytes of text go out as {textBytes + ENCRYPTION_OVERHEAD}. Every
-        seal picks a fresh nonce, as the app does, so SEAL AGAIN or any edit changes every byte after it. WRONG KEY opens this
-        same frame with one character of the key changed, and FLIP ONE BIT changes a single bit of it, highlighted; nothing is
-        sealed again. Either way, it no longer opens.
+        seal picks a fresh nonce, as the app does, so sealing again gives a different ciphertext and tag. WRONG KEY opens this
+        same frame with one character of the key changed, and FLIP ONE BIT changes a single bit of it, highlighted; neither seals
+        again. Either way, it no longer opens.
       </figcaption>
     </figure>
   );
