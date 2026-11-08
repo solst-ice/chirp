@@ -18,6 +18,8 @@ import {
   decryptFrame,
   deriveKey,
   encryptFrame,
+  forgetKey,
+  generateKey,
   normalizeKey,
   type OpenResult,
 } from './modem/encryption';
@@ -186,6 +188,10 @@ const goodput = (mode: TxMode) => Math.round((100 * 8) / mode.modem.airtime(100 
 /** Airtime of a message of this many bytes once it is framed (and sealed) for a mode. */
 const messageAirtime = (mode: TxMode, bytes: number) => mode.modem.airtime(bytes + (mode.encrypted ? ENCRYPTION_OVERHEAD : 0));
 
+/** Stand-ins the size of the frames a mode will play, for estimating airtime before sealing. */
+const asPlayed = (mode: TxMode, frames: Frame[]): Frame[] =>
+  mode.encrypted ? frames.map((f) => ({ type: FrameType.Encrypted, payload: new Uint8Array(f.payload.length + ENCRYPTION_OVERHEAD) })) : frames;
+
 const sealAll = async (passphrase: string, frames: Frame[]) => {
   const key = await deriveKey(passphrase);
   return Promise.all(frames.map((f) => encryptFrame(key, f)));
@@ -213,6 +219,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+const fileLineKey = (encrypted: boolean, fileId: number) => `${encrypted ? 'sealed' : 'plain'}:${fileId}`;
 
 const AudioContextClass: typeof AudioContext =
   window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -329,6 +337,8 @@ function App() {
   const [spectrumOpen, setSpectrumOpen] = useState(true);
   // Kept in memory only: never stored, so closing the tab forgets it.
   const [psk, setPsk] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -340,7 +350,11 @@ function App() {
   const nextIdRef = useRef(1);
   const receptionsRef = useRef<Map<string, Reception>>(new Map());
   const assemblerRef = useRef(new FileAssembler());
-  const fileLinesRef = useRef<Map<number, FileLine>>(new Map());
+  // Decrypted file frames assemble apart from plain ones, so an unauthenticated
+  // frame can never join, rename or complete an encrypted transfer.
+  const sealedAssemblerRef = useRef(new FileAssembler());
+  // Keyed by `fileLineKey`: the two assemblers may hold the same file id.
+  const fileLinesRef = useRef<Map<string, FileLine>>(new Map());
   const blobUrlsRef = useRef<Set<string>>(new Set());
   const selfTestRef = useRef<SelfTest | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -369,7 +383,7 @@ function App() {
         if (old.file && blobUrlsRef.current.delete(old.file.url)) URL.revokeObjectURL(old.file.url);
       }
       // A transfer whose row scrolled out of the log starts a new row if it continues.
-      for (const [fileId, entry] of fileLinesRef.current) if (trimmed.has(entry.lineId)) fileLinesRef.current.delete(fileId);
+      for (const [key, entry] of fileLinesRef.current) if (trimmed.has(entry.lineId)) fileLinesRef.current.delete(key);
       return next;
     });
     return id;
@@ -459,10 +473,10 @@ function App() {
   };
 
   /** Close the log row of a transfer the assembler no longer holds. */
-  const dropFileLine = (fileId: number, reason: string) => {
-    const entry = fileLinesRef.current.get(fileId);
+  const dropFileLine = (key: string, reason: string) => {
+    const entry = fileLinesRef.current.get(key);
     if (!entry) return;
-    fileLinesRef.current.delete(fileId);
+    fileLinesRef.current.delete(key);
     updateLine(entry.lineId, {
       tag: 'warn',
       progress: undefined,
@@ -470,19 +484,20 @@ function App() {
     });
   };
 
-  const handleFileProgress = async (p: FileProgress, mode: string) => {
-    for (const id of p.evicted ?? []) dropFileLine(id, 'dropped to make room');
+  const handleFileProgress = async (p: FileProgress, mode: string, encrypted: boolean) => {
+    for (const id of p.evicted ?? []) dropFileLine(fileLineKey(encrypted, id), 'dropped to make room');
     if (p.alreadyDelivered) return;
+    const key = fileLineKey(encrypted, p.fileId);
     const name = p.manifest?.name ?? `file #${p.fileId.toString(16)}`;
-    let entry = fileLinesRef.current.get(p.fileId);
+    let entry = fileLinesRef.current.get(key);
     if (!entry) {
       entry = { lineId: addLine({ tag: 'rx', mode, text: name, progress: 0 }), name, received: 0, lastSeen: 0, stale: false };
-      fileLinesRef.current.set(p.fileId, entry);
+      fileLinesRef.current.set(key, entry);
     }
     Object.assign(entry, { name, received: p.received, total: p.total, lastSeen: Date.now(), stale: false });
 
     if (p.error) {
-      fileLinesRef.current.delete(p.fileId);
+      fileLinesRef.current.delete(key);
       updateLine(entry.lineId, { tag: 'err', progress: undefined, text: name, note: p.error });
       announce(`File ${name} failed: ${p.error}`);
       return;
@@ -496,14 +511,20 @@ function App() {
       });
       return;
     }
-    fileLinesRef.current.delete(p.fileId);
+    fileLinesRef.current.delete(key);
     try {
       const m = p.manifest!;
       const data = m.compressed ? await decompress(p.data, m.size) : p.data;
       // Served as a download, never as a page in our origin.
       const url = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }));
       blobUrlsRef.current.add(url);
-      updateLine(entry.lineId, { tag: 'rx', progress: undefined, text: name, file: { name, url, size: data.length }, note: 'checksum ok' });
+      updateLine(entry.lineId, {
+        tag: 'rx',
+        progress: undefined,
+        text: name,
+        file: { name, url, size: data.length },
+        note: encrypted ? 'decrypted · checksum ok' : 'checksum ok',
+      });
       announce(`Received file ${name}, ${formatBytes(data.length)}`);
     } catch (err) {
       updateLine(entry.lineId, { tag: 'err', progress: undefined, text: name, note: errorText(err) });
@@ -511,17 +532,24 @@ function App() {
     }
   };
 
-  const deliverFrame = (frame: Frame, label: string, lineId?: number, note?: string) => {
+  /**
+   * Show a text frame or hand a file frame to its assembler. `replyVia` is the
+   * mode a demo reply goes out in: plain frames reply on the carrier they came
+   * in on, and decrypted ones never trigger a reply.
+   */
+  const deliverFrame = (frame: Frame, label: string, o: { encrypted: boolean; lineId?: number; replyVia?: string }) => {
+    const note = o.encrypted ? 'decrypted' : undefined;
     if (frame.type === FrameType.Text) {
       const text = decodeText(frame.payload);
-      if (lineId !== undefined) updateLine(lineId, { progress: undefined, text, note });
+      if (o.lineId !== undefined) updateLine(o.lineId, { progress: undefined, text, note });
       else addLine({ tag: 'rx', mode: label, text, note });
       announce(`Received: ${text}`);
       const reply = DEMO_REPLIES[text.trim().toUpperCase()];
-      if (reply) setTimeout(() => sendTextRef.current(reply, false), 1300);
+      const via = o.replyVia;
+      if (reply && via && !o.encrypted) setTimeout(() => sendTextRef.current(reply, false, via), 1300);
     } else {
-      const progress = assemblerRef.current.accept(frame);
-      if (progress) void handleFileProgress(progress, label);
+      const progress = (o.encrypted ? sealedAssemblerRef : assemblerRef).current.accept(frame);
+      if (progress) void handleFileProgress(progress, label, o.encrypted);
     }
   };
 
@@ -543,7 +571,7 @@ function App() {
   const openFrame = async (payload: Uint8Array) => {
     const passphrase = pskRef.current;
     if (!passphrase) {
-      noteLocked(`select ${ENCRYPTED_LABEL} and enter the pre-shared key to read these`);
+      noteLocked(`select ${ENCRYPTED_LABEL}, enter the pre-shared key, then ask the sender to resend`);
       return;
     }
     let result: OpenResult;
@@ -557,12 +585,12 @@ function App() {
       noteLocked(unopenedNote(result));
       return;
     }
-    if (replayGuardRef.current.replayed(result.nonce)) {
+    if (replayGuardRef.current.replayed(result.nonce, result.sentAt)) {
       // Repeated file frames are harmless (the assembler ignores them); a repeated message is worth a mention.
       if (result.frame.type === FrameType.Text) addLine({ tag: 'warn', mode: ENCRYPTED_LABEL, text: 'replayed encrypted message ignored' });
       return;
     }
-    deliverFrame(result.frame, ENCRYPTED_LABEL, undefined, 'decrypted');
+    deliverFrame(result.frame, ENCRYPTED_LABEL, { encrypted: true });
   };
 
   // Reassigned every render so callbacks from the capture node always see current state.
@@ -612,7 +640,7 @@ function App() {
         }
         setLastRx({ mode: label, marginDb: e.stats.marginDb, corrected: e.stats.correctedBytes });
         if (frame.type === FrameType.Encrypted) void openFrame(frame.payload);
-        else deliverFrame(frame, label, reception?.lineId);
+        else deliverFrame(frame, label, { encrypted: false, lineId: reception?.lineId, replyVia: e.modemId });
         break;
       }
 
@@ -702,15 +730,16 @@ function App() {
     addLine({ tag: 'sys', text: 'stopped listening' });
   };
 
-  const sendText = async (text: string, fromComposer: boolean): Promise<void> => {
+  /** `modeId` overrides the selected mode (automatic replies keep the mode of the message they answer). */
+  const sendText = async (text: string, fromComposer: boolean, modeId?: string): Promise<void> => {
     if (!text) return;
     if (transmitter.busy) {
       // Automatic replies wait their turn; typed messages say why nothing happened.
-      if (!fromComposer) setTimeout(() => sendTextRef.current(text, false), 500);
+      if (!fromComposer) setTimeout(() => sendTextRef.current(text, false, modeId), 500);
       else addLine({ tag: 'warn', text: 'already transmitting', note: 'wait or press ESC to cancel' });
       return;
     }
-    const mode = getMode(modeRef.current);
+    const mode = getMode(modeId ?? modeRef.current);
     const m = mode.modem;
     const passphrase = pskRef.current;
     const payload = new TextEncoder().encode(text);
@@ -794,10 +823,8 @@ function App() {
             compressed,
             chunkSize: chunkSizeFor(target),
           }).frames;
-        // Every frame is sealed on its own, so a receiver can open chunks in any order and RESEND still fills gaps.
-        const frames = mode.encrypted ? await sealAll(passphrase, build({ rawBitRate: m.rawBitRate, maxPayload: mode.maxPayload })) : build(m);
-        if (signal.aborted) return null;
-        const eta = airtimeOf(m, frames);
+        const frames = build(mode.encrypted ? { rawBitRate: m.rawBitRate, maxPayload: mode.maxPayload } : m);
+        const eta = airtimeOf(m, asPlayed(mode, frames));
         if (eta > MAX_AIRTIME_S) {
           const fast = MODEMS[0];
           const fastEta = airtimeOf(fast, build(fast));
@@ -813,10 +840,14 @@ function App() {
         ) {
           return null;
         }
+        // Sealed only now, so time spent confirming does not age the timestamps. Every frame is
+        // sealed on its own, so a receiver can open chunks in any order and RESEND still fills gaps.
+        const played = mode.encrypted ? await sealAll(passphrase, frames) : frames;
+        if (signal.aborted) return null;
         size = `${formatBytes(raw.length)}${compressed ? ` → ${formatBytes(data.length)} deflated` : ''}`;
         setLastFile({ file, fileId, modemId: mode.id });
         lineId = addLine({ tag: 'tx', mode: m.label, text: file.name, note: size, progress: 0 });
-        return { modem: m, frames };
+        return { modem: m, frames: played };
       },
       (s: SendingState) =>
         lineId !== undefined &&
@@ -849,9 +880,21 @@ function App() {
   };
 
   const resendLastFile = () => {
+    if (!lastFile) return;
+    // Never quietly send in the clear what went out encrypted.
+    const current = getMode(modeRef.current);
+    if (getMode(lastFile.modemId).encrypted && !current.encrypted) {
+      addLine({
+        tag: 'warn',
+        mode: current.label,
+        text: lastFile.file.name,
+        note: `not resent · it was sent encrypted · select ${ENCRYPTED_LABEL} to resend, or use FILE to send it unencrypted`,
+      });
+      return;
+    }
     // Chunk boundaries depend on the mode, so the id (which lets the receiver
     // merge chunks) is only reused when the mode, encrypted or not, is unchanged.
-    if (lastFile) void sendFile(lastFile.file, lastFile);
+    void sendFile(lastFile.file, lastFile);
   };
 
   const runSelfTest = async () => {
@@ -861,7 +904,9 @@ function App() {
     }
     if (transmitter.busy) return;
     // Tests the carrier only; the test frame is never encrypted.
-    const m = getMode(modeRef.current).modem;
+    const testMode = getMode(modeRef.current);
+    const m = testMode.modem;
+    const heard = testMode.encrypted ? `${ENCRYPTED_CARRIER.label} audio (the key is not checked)` : `${m.label} signal`;
     const nonce = crypto.getRandomValues(new Uint8Array(8));
     let resolve!: () => void;
     const done = new Promise<void>((r) => (resolve = r));
@@ -890,13 +935,13 @@ function App() {
               : 'cancelled';
       updateLine(lineId, { tag: 'warn', progress: undefined, note });
     } else if (test.heard) {
-      updateLine(lineId, { tag: 'rx', progress: undefined, note: `passed · this device hears its own ${m.label} signal · margin ${test.heard.marginDb.toFixed(1)} dB` });
+      updateLine(lineId, { tag: 'rx', progress: undefined, note: `passed · this device hears its own ${heard} · margin ${test.heard.marginDb.toFixed(1)} dB` });
       announce(`Loopback test passed for ${m.label}`);
     } else {
       updateLine(lineId, {
         tag: 'warn',
         progress: undefined,
-        note: `failed · this device did not hear its own ${m.label} signal · raise the volume, avoid Bluetooth, or try another mode`,
+        note: `failed · this device did not hear its own ${heard} · raise the volume, avoid Bluetooth, or try another mode`,
       });
       announce(`Loopback test failed for ${m.label}`);
     }
@@ -969,7 +1014,8 @@ function App() {
   const fileTickRef = useRef<() => void>(() => {});
   fileTickRef.current = () => {
     const now = Date.now();
-    for (const id of assemblerRef.current.expire(now)) dropFileLine(id, 'expired');
+    for (const id of assemblerRef.current.expire(now)) dropFileLine(fileLineKey(false, id), 'expired');
+    for (const id of sealedAssemblerRef.current.expire(now)) dropFileLine(fileLineKey(true, id), 'expired');
     for (const entry of fileLinesRef.current.values()) {
       if (entry.stale || now - entry.lastSeen < FILE_STALE_MS) continue;
       entry.stale = true;
@@ -995,7 +1041,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!normalizeKey(psk)) return;
+    if (!normalizeKey(psk)) {
+      forgetKey();
+      return;
+    }
     const t = setTimeout(() => void deriveKey(psk).catch(() => undefined), KEY_WARMUP_MS);
     return () => clearTimeout(t);
   }, [psk]);
@@ -1027,6 +1076,15 @@ function App() {
   const overLimit = payloadBytes > mode.maxPayload;
   const keyChars = Array.from(normalizeKey(psk)).length;
   const keyMissing = mode.encrypted && keyChars === 0;
+  const keyGenerated = generatedKey !== null && psk === generatedKey;
+  const keyHint =
+    keyChars === 0
+      ? 'needed to send · also opens encrypted messages you receive · kept in memory only'
+      : keyGenerated
+        ? 'random key · read it out to the other device and type it there exactly'
+        : keyChars < MIN_KEY_CHARS
+          ? `${keyChars} chars · too short: a recording lets anyone guess it · use 5+ random words or GENERATE`
+          : `${keyChars} chars · random words or GENERATE, never a phrase · case-sensitive`;
   const maxFrequency = Math.min(20000, sampleRate / 2);
   const audioRunning = audioState === 'running';
 
@@ -1216,18 +1274,21 @@ function App() {
                 <span className="prompt-sign" aria-hidden="true">
                   #
                 </span>
-                {/* A textarea so a long key wraps and stays readable; the key itself is one line. */}
-                <textarea
+                {/* Masked unless shown, against shoulder-surfing and screen sharing. Locked while sending: the job already holds its key. */}
+                <input
                   id="psk"
+                  type={showKey ? 'text' : 'password'}
                   value={psk}
-                  rows={2}
+                  disabled={txBusy}
                   spellCheck={false}
                   autoComplete="off"
                   autoCapitalize="none"
                   autoCorrect="off"
                   aria-describedby="psk-meta"
-                  onChange={(e) => setPsk(e.target.value.replace(/[\r\n]+/g, ' '))}
+                  onChange={(e) => setPsk(e.target.value)}
                   onKeyDown={(e) => {
+                    // Enter that confirms an IME composition must not move on.
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                     if (e.key === 'Enter') {
                       e.preventDefault();
                       inputRef.current?.focus();
@@ -1235,13 +1296,26 @@ function App() {
                   }}
                   placeholder="type a 20+ character key, same on both devices"
                 />
+                <button className="btn btn-inline" onClick={() => setShowKey((v) => !v)}>
+                  [ {showKey ? 'HIDE' : 'SHOW'} ]
+                </button>
+                <button
+                  className="btn btn-inline"
+                  disabled={txBusy}
+                  title="Fill in a random 25-character key"
+                  onClick={() => {
+                    const key = generateKey();
+                    setPsk(key);
+                    setGeneratedKey(key);
+                    // It has to be read out to the other device.
+                    setShowKey(true);
+                  }}
+                >
+                  [ GENERATE ]
+                </button>
               </div>
-              <div id="psk-meta" className={`tx-meta${keyChars > 0 && keyChars < MIN_KEY_CHARS ? ' warn' : ''}`}>
-                {keyChars === 0
-                  ? 'needed to send · also opens encrypted messages you receive · kept in memory only'
-                  : keyChars < MIN_KEY_CHARS
-                    ? `${keyChars} chars · short keys can be guessed from a recording: use 5+ random words`
-                    : `${keyChars} chars · case-sensitive · kept in memory only`}
+              <div id="psk-meta" className={`tx-meta${!keyGenerated && keyChars > 0 && keyChars < MIN_KEY_CHARS ? ' warn' : ''}`}>
+                {keyHint}
               </div>
             </>
           )}

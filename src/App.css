@@ -377,7 +377,8 @@
   color: var(--accent);
 }
 
-.prompt textarea {
+.prompt textarea,
+.prompt input {
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -388,8 +389,14 @@
   caret-color: var(--accent);
 }
 
-.prompt textarea::placeholder {
+.prompt textarea::placeholder,
+.prompt input::placeholder {
   color: var(--dim);
+}
+
+.prompt .btn-inline {
+  flex: none;
+  padding: 0;
 }
 
 .tx-meta {
@@ -675,6 +682,14 @@ details > summary:focus-visible {
 
   .mode-hint-specs {
     display: inline;
+  }
+}
+
+/* Very narrow phones: two rows of two, so no mode name is cut short. */
+@media (max-width: 380px) {
+  .modes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
   }
 }
 
