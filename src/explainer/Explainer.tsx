@@ -555,7 +555,7 @@ export default function Explainer() {
       id: 'using',
       title: '9 · Using it',
       takeaway: (
-        <ul className="ex-list">
+        <ul className="ex-list ex-points">
           <li>Start with FAST.</li>
           <li>Check the receiver: "sent" only means the sound played.</li>
           <li>For privacy: ENCRYPTED with a generated key, and TWO-WAY to protect old recordings.</li>

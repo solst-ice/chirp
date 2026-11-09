@@ -80,6 +80,17 @@
   display: none;
 }
 
+/* A figure's essential context when its caption is hidden on a slide. */
+.ex-slide-only {
+  display: none;
+}
+
+.ex-slide .ex-slide-only {
+  display: block;
+  margin: 8px 0 0;
+  color: var(--dim);
+}
+
 .explainer .ex-takeaway {
   line-height: 1.35;
 }

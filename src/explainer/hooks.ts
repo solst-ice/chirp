@@ -13,14 +13,20 @@ export interface SlideStepper {
 /**
  * Set by presentation mode: the stepping figure on the current slide, if any.
  * The forward key reveals its next step before moving on to the next slide.
+ * `atEnd` is set when going back, so the slide returns fully revealed.
  */
-export const SlideSteps = createContext<{ current: SlideStepper | null } | null>(null);
+export interface SlideStepsRef {
+  current: SlideStepper | null;
+  atEnd: boolean;
+}
+export const SlideSteps = createContext<SlideStepsRef | null>(null);
 
 /**
  * Steps on its own while on screen, until the reader takes over with BACK or
  * NEXT. With reduced motion it stands still on `restAt`: by default the last
  * step, which for a figure that builds up shows everything at once. While
- * presenting it waits on step one for the presenter.
+ * presenting it waits on step one for the presenter, or on its last step when
+ * the presenter came back to it.
  */
 export function useStepper(count: number, ms: number, restAt = count - 1) {
   const ref = useRef<HTMLElement>(null);
@@ -28,7 +34,7 @@ export function useStepper(count: number, ms: number, restAt = count - 1) {
   const reduced = useReducedMotion();
   const slideSteps = useContext(SlideSteps);
   const presenting = slideSteps !== null;
-  const [manual, setManual] = useState<number | null>(null);
+  const [manual, setManual] = useState<number | null>(() => (slideSteps?.atEnd ? count - 1 : null));
   const [base, setBase] = useState(0);
   const tick = useTicker(ms, visible && !reduced && !presenting && manual === null);
   const step = manual ?? (presenting ? 0 : reduced ? restAt : (tick - base) % count);

@@ -958,6 +958,9 @@ export function GuessFigure() {
           </div>
         ))}
       </div>
+      <p className="ex-slide-only">
+        Illustrative: {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a second · each step is 10× longer
+      </p>
       <figcaption>
         Illustrative, not a benchmark: the average time to find the key at {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a
         second against PBKDF2. Real phrases do worse than their bar, since attackers try popular ones first. Each step along the

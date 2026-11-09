@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { SlideSteps, SlideZoom, type SlideStepper } from './hooks';
+import { SlideSteps, SlideZoom, type SlideStepsRef } from './hooks';
 import { stopSound } from './sound';
 
 export interface Slide {
@@ -42,9 +42,13 @@ export default function Presentation({
   const cap = useRef(MAX_ZOOM);
   const floor = useRef(1);
   /** The current slide's stepping figure, registered by useStepper. */
-  const steps = useRef<SlideStepper | null>(null);
+  const steps = useRef<SlideStepsRef>({ current: null, atEnd: false }).current;
   const last = slides.length - 1;
-  const go = (n: number) => onIndex(Math.max(0, Math.min(last, n)));
+  /** Going back returns to a slide as it was left: its figure fully revealed. */
+  const go = (n: number) => {
+    steps.atEnd = n < index;
+    onIndex(Math.max(0, Math.min(last, n)));
+  };
   // The keys (and a clicker, which sends them) reveal a figure's next step before
   // moving on; the bar's arrows always change slide.
   const forward = () => {
