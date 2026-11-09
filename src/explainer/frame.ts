@@ -44,8 +44,8 @@ export function fastFrame(payload: Uint8Array): FastFrame {
   return result;
 }
 
-/** Slots alternate between two tone sets, A and B; B is A moved up one grid step. */
-export const toneSet = (slot: number) => (slot % 2 ? 'B' : 'A');
+/** Slots alternate between two tone sets, 1 and 2; set 2 is set 1 moved up one grid step. */
+export const toneSet = (slot: number) => (slot % 2 ? 2 : 1);
 
 export interface SlotTone {
   /** Index into `bytes`; past its end for the padding that fills the last slot. */

@@ -1,30 +1,14 @@
 // Figures for section 8, two-way sessions: Diffie–Hellman for readers who have
-// never met it. An analogy with paint, how the passphrase and the shared secret
-// combine, chirp's real handshake run by the app's own code, and what a
-// recording opens once the passphrase leaks.
+// never met it. What a recording opens once the passphrase leaks, an analogy
+// with paint, how the passphrase and the shared secret combine, and chirp's
+// handshake computed by the app's own code.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { deriveKeys, generateKey } from '../modem/encryption';
-import { HELLO_BYTES, REPLY_BYTES, createEphemeral, deriveSession, openInSession, sealInSession } from '../modem/session';
+import { HELLO_BYTES, REPLY_BYTES, createEphemeral, deriveSession, openInSession, sameBytes, sealInSession } from '../modem/session';
 import { FrameType } from '../modem/types';
 import { SteadyText } from './figures';
-import { useReducedMotion, useTicker, useVisible } from './hooks';
-
-/**
- * Steps on its own while on screen, until the reader takes over with BACK or
- * NEXT. With reduced motion it stands still on `restAt`: by default the last
- * step, which for a figure that builds up shows everything at once.
- */
-function useStepper(count: number, ms: number, restAt = count - 1) {
-  const ref = useRef<HTMLElement>(null);
-  const visible = useVisible(ref);
-  const reduced = useReducedMotion();
-  const [manual, setManual] = useState<number | null>(null);
-  const tick = useTicker(ms, visible && !reduced && manual === null);
-  const step = manual ?? (reduced ? restAt : tick % count);
-  const go = (n: number) => setManual(((n % count) + count) % count);
-  return { ref, step, manual: manual !== null, go };
-}
+import { useStepper } from './hooks';
 
 function StepControls({ step, go }: { step: number; go: (n: number) => void }) {
   return (
@@ -47,6 +31,8 @@ const PIGMENT: Record<Pigment, [number, number, number]> = {
   a: [255, 43, 109],
   b: [41, 216, 255],
 };
+/** Letters in the pots, so the mixes can be followed without telling colours apart. */
+const LETTER: Record<Pigment, string> = { common: 'C', a: 'A', b: 'B' };
 
 /** Paint mixed from equal parts: what matters is which parts, not the order they went in. */
 const mix = (parts: Pigment[]) => {
@@ -57,12 +43,9 @@ const mix = (parts: Pigment[]) => {
 function Pot({ parts, label, show, from, tone }: { parts: Pigment[]; label: string; show: boolean; from?: 'left' | 'right'; tone?: 'ok' | 'err' }) {
   return (
     <div className={`ex-swatch${show ? '' : ' ex-unshown'}${show && from ? ` ex-from-${from}` : ''}`} aria-hidden={!show}>
-      <span className="ex-pot" style={{ background: mix(parts) }} />
-      {/* What went in: the difference the listener can't see past. */}
-      <span className="ex-chips" aria-hidden="true">
-        {parts.map((p, i) => (
-          <span key={i} style={{ background: mix([p]) }} />
-        ))}
+      {/* The letters show the reader what went in; the listener sees only the colour. */}
+      <span className="ex-pot" style={{ background: mix(parts) }} aria-hidden="true">
+        {parts.map((p) => LETTER[p]).join('+')}
       </span>
       <span className={`ex-swatch-label${tone ? ` ${tone}` : ''}`}>{label}</span>
     </div>
@@ -70,12 +53,12 @@ function Pot({ parts, label, show, from, tone }: { parts: Pigment[]; label: stri
 }
 
 const PAINT_STEPS = [
-  'A and B start from the same colour, out in the open',
-  'each picks a secret colour, and never shows it to anyone',
-  'each stirs its secret into the common colour',
+  'A and B start from the same common colour, C, out in the open',
+  'each picks a secret colour and never shows it',
+  'each stirs its secret into C',
   'they swap their mixes out loud: the listener hears both',
   "each adds its own secret to the other's mix: the same colour on both sides",
-  "the listener can't take the common colour back out of a mix. Mixing the two it heard puts it in twice: the wrong colour",
+  "the listener can't unmix them. Mixing the two it heard puts C in twice: the wrong colour",
 ];
 
 export function PaintFigure() {
@@ -86,7 +69,7 @@ export function PaintFigure() {
       <div className="ex-paint">
         <span />
         <span className="ex-paint-head">device A</span>
-        <span className="ex-paint-head warn">on air · everyone hears</span>
+        <span className="ex-paint-head warn">on air</span>
         <span className="ex-paint-head">device B</span>
 
         <span className="ex-paint-row dim">public</span>
@@ -115,8 +98,8 @@ export function PaintFigure() {
       <SteadyText className="ex-verdict" texts={PAINT_STEPS.map((s, i) => `${i + 1}/${PAINT_STEPS.length} · ${s}`)} index={step} live={manual} />
       <StepControls step={step} go={go} />
       <figcaption>
-        An analogy, not the real thing: paint stands in for numbers. The small squares under each pot show what went into it.
-        Both results hold the same three colours, so they match; the listener's has the common colour twice.
+        An analogy: paint stands in for numbers. The letters in each pot show you what went in; the listener sees only the
+        colour.
       </figcaption>
     </figure>
   );
@@ -132,7 +115,7 @@ const MIX_SCENARIOS: { label: string; passphrase: boolean; secret: boolean; keys
     secret: true,
     keys: 'same',
     tone: 'ok',
-    outcome: "✓ has both: the same keys as A, and a proof that checks out",
+    outcome: '✓ has both: the same keys as A, and a proof that checks out',
   },
   {
     label: 'A LISTENER',
@@ -140,7 +123,7 @@ const MIX_SCENARIOS: { label: string; passphrase: boolean; secret: boolean; keys
     secret: false,
     keys: 'none',
     tone: 'err',
-    outcome: "✗ heard both public halves, but has neither ingredient",
+    outcome: '✗ heard both public keys, but has neither input',
   },
   {
     label: 'A STRANGER WHO ANSWERS',
@@ -148,7 +131,7 @@ const MIX_SCENARIOS: { label: string; passphrase: boolean; secret: boolean; keys
     secret: true,
     keys: 'different',
     tone: 'err',
-    outcome: "✗ shares a secret with A by answering its hello, but without the passphrase its keys differ: the proof fails, and A sends nothing",
+    outcome: '✗ answering the hello gives it a shared secret, but without the passphrase its keys differ: the proof fails, and A sends nothing',
   },
   {
     label: 'THE PASSPHRASE, LATER',
@@ -156,7 +139,7 @@ const MIX_SCENARIOS: { label: string; passphrase: boolean; secret: boolean; keys
     secret: false,
     keys: 'none',
     tone: 'err',
-    outcome: '✗ has the passphrase now, but the secrets were deleted after the session: the recording stays sealed',
+    outcome: '✗ has the passphrase now, but the private keys were dropped after the handshake: the recording stays sealed',
   },
   {
     label: 'A KEY HOLDER IN THE MIDDLE',
@@ -164,7 +147,7 @@ const MIX_SCENARIOS: { label: string; passphrase: boolean; secret: boolean; keys
     secret: true,
     keys: 'same',
     tone: 'warn',
-    outcome: '! the limit: knowing the passphrase, and running its own handshake with each device while they talk, it has both',
+    outcome: '! the limit: with the passphrase, it runs a separate handshake with each device while they talk',
   },
 ];
 
@@ -172,6 +155,7 @@ function Ingredient({ has, children }: { has: boolean | 'public'; children: Reac
   const state = has === 'public' ? 'public' : has ? 'have' : 'lack';
   return (
     <span className={`ex-ingredient ${state}`}>
+      {state !== 'public' && <span aria-hidden="true">{state === 'have' ? '✓ ' : '✗ '}</span>}
       {children}
       <span className="sr-only">{state === 'have' ? ' (has it)' : state === 'lack' ? ' (lacks it)' : ' (heard by everyone)'}</span>
     </span>
@@ -198,13 +182,13 @@ export function MixFigure() {
           <Ingredient has={sc.passphrase}>passphrase key</Ingredient>
         </div>
         <div className="ex-mix-row">
-          <Ingredient has={sc.secret}>own secret</Ingredient>
+          <Ingredient has={sc.secret}>own private key</Ingredient>
           <span className="ex-mix-op">+</span>
-          <Ingredient has="public">other's public half</Ingredient>
+          <Ingredient has="public">other's public key</Ingredient>
           <span className="ex-mix-op">→ X25519 →</span>
           <Ingredient has={sc.secret}>shared secret</Ingredient>
         </div>
-        <p className="ex-mix-op ex-mix-join">↓ both together, through HMAC and HKDF ↓</p>
+        <p className="ex-mix-op ex-mix-join">↓ combined ↓</p>
         <div className={`ex-mix-row ex-mix-out keys-${sc.keys}`}>
           {['A→B key', 'B→A key', 'proof'].map((k) => (
             <Ingredient key={k} has={out}>
@@ -215,21 +199,20 @@ export function MixFigure() {
       </div>
       <SteadyText className={`ex-verdict ${sc.tone}`} texts={MIX_SCENARIOS.map((m) => m.outcome)} index={step} live={manual} />
       <figcaption>
-        Green: has it. Red: lacks it. Blue: heard by everyone. Only someone with both ingredients makes the session keys, and
-        the only way to have both is to know the passphrase and take part in the handshake as it happens.
+        Simplified. ✓ has it, ✗ lacks it; the public key is heard by everyone. Getting both inputs means knowing the passphrase
+        and taking part in the handshake as it happens.
       </figcaption>
     </figure>
   );
 }
 
-/* ── 8c · chirp's handshake, run by the app's own code ── */
+/* ── 8c · chirp's handshake, computed by the app's own code ── */
 
 const MESSAGE = 'meet at the north gate';
 
 interface Run {
   aPub: Uint8Array;
   bPub: Uint8Array;
-  code: string;
   sealedBytes: number;
   opened: string;
   /** What a listener with the passphrase gets from the sealed message, pairing the recorded keys with a key pair of its own. */
@@ -244,6 +227,8 @@ async function runHandshake(): Promise<Run> {
   const b = await createEphemeral();
   const kA = await deriveSession(mix, a, 'initiator', a.publicKey, b.publicKey);
   const kB = await deriveSession(mix, b, 'responder', a.publicKey, b.publicKey);
+  // What A checks in B's reply before sending anything.
+  if (!sameBytes(kA.confirm, kB.confirm)) throw new Error('the proof did not check out');
   const sealed = await sealInSession(kA, { type: FrameType.Text, payload: new TextEncoder().encode(MESSAGE) });
   const opened = await openInSession(kB.receive, sealed.payload);
   if (!opened.ok) throw new Error('the handshake did not agree');
@@ -256,17 +241,17 @@ async function runHandshake(): Promise<Run> {
   return {
     aPub: a.publicKey,
     bPub: b.publicKey,
-    code: `${kA.idHex.slice(0, 4)}-${kA.idHex.slice(4)}`,
     sealedBytes: sealed.payload.length,
     opened: new TextDecoder().decode(opened.frame.payload),
-    listener: listenerOpened ? 'it opened (this should never happen)' : "✗ its keys don't match, so the message stays sealed",
+    listener: listenerOpened ? 'it opened (this should never happen)' : "✗ a different private key: its keys don't match, so the message stays sealed",
   };
 }
 
 type Side = 'a' | 'b' | 'right' | 'left' | 'both' | 'listener';
 
-const Secret = ({ gone = false }: { gone?: boolean }) => <span className={`ex-secret${gone ? ' ex-gone' : ''}`}>■ secret</span>;
-const Public = ({ bytes }: { bytes?: Uint8Array }) => <span className="ex-public">{bytes ? short(bytes) : '…'}</span>;
+const Secret = ({ gone = false }: { gone?: boolean }) => <span className={`ex-secret${gone ? ' ex-gone' : ''}`}>■ private key</span>;
+/** A public key's first bytes, with the space before it, so slides can hide both. */
+const Public = ({ bytes }: { bytes?: Uint8Array }) => <span className="ex-public"> {bytes ? short(bytes) : '…'}</span>;
 
 export function HandshakeFigure() {
   const [run, setRun] = useState<Run | null>(null);
@@ -287,45 +272,44 @@ export function HandshakeFigure() {
   startRef.current = start;
   useEffect(() => void startRef.current(), []);
 
-  const code = run?.code ?? '…';
   const rows: { side: Side; body: ReactNode; caption: string }[] = [
     {
       side: 'a',
       body: (
         <>
-          A makes a fresh <Secret /> and its public half <Public bytes={run?.aPub} />
+          A makes a fresh <Secret /> and public key<Public bytes={run?.aPub} />
         </>
       ),
-      caption: 'A makes a fresh secret, and the public half that goes with it',
+      caption: 'A makes a fresh key pair',
     },
     {
       side: 'right',
-      body: <>hello · A's public half · {HELLO_BYTES} bytes</>,
-      caption: 'A plays a hello: just its public half',
+      body: <>hello · A's public key · {HELLO_BYTES} bytes</>,
+      caption: 'A plays a hello: just its public key',
     },
     {
       side: 'b',
       body: (
         <>
-          B makes its own <Secret /> and public half <Public bytes={run?.bPub} />, works out the shared secret, and mixes in the
-          passphrase: session <span className="ex-readout">{code}</span>
+          B makes its own <Secret /> and public key<Public bytes={run?.bPub} />, derives the session keys, and drops its{' '}
+          <Secret gone />
         </>
       ),
-      caption: "B makes its own pair, combines its secret with A's public half, and mixes in the passphrase",
+      caption: "B combines its private key with A's public key and the passphrase, then drops the private key",
     },
     {
       side: 'left',
-      body: <>reply · B's public half + a 16-byte proof · {REPLY_BYTES} bytes</>,
-      caption: 'B replies with its public half, and a proof that it knows the passphrase',
+      body: <>reply · B's public key + a 16-byte proof · {REPLY_BYTES} bytes</>,
+      caption: 'B replies with its public key, and a proof that it knows the passphrase',
     },
     {
       side: 'a',
       body: (
         <>
-          A works out the same: session <span className="ex-readout">{code}</span> · the proof checks out ✓
+          A derives the same keys · the proof checks out ✓ · drops its <Secret gone />
         </>
       ),
-      caption: "A combines its secret with B's public half: the same keys, so the proof checks out",
+      caption: "A combines its private key with B's public key: the same keys, so the proof checks out",
     },
     {
       side: 'right',
@@ -334,7 +318,7 @@ export function HandshakeFigure() {
           "{MESSAGE}", sealed with the session key · {run?.sealedBytes ?? '…'} bytes
         </>
       ),
-      caption: 'the message follows, sealed with the session key',
+      caption: 'only then does the message follow, sealed with the session key',
     },
     {
       side: 'b',
@@ -342,21 +326,16 @@ export function HandshakeFigure() {
       caption: 'B opens it',
     },
     {
-      side: 'both',
-      body: (
-        <>
-          both forget their <Secret gone />
-        </>
-      ),
-      caption: 'both forget their secrets. The session keys go too, within the hour',
-    },
-    {
       side: 'listener',
       body: <>listener: recorded every byte, and knows the passphrase · {run?.listener ?? '…'}</>,
-      caption: 'a listener with the passphrase and the whole recording still lacks a secret',
+      caption: 'a listener with the passphrase and the whole recording still lacks a private key',
     },
   ];
-  const { ref, step, manual, go } = useStepper(rows.length, 2200);
+  const { ref, step, manual, go, reset } = useStepper(rows.length, 2200);
+  const again = () => {
+    reset();
+    void start();
+  };
 
   return (
     <figure className="ex-figure" ref={ref}>
@@ -382,7 +361,8 @@ export function HandshakeFigure() {
           </li>
         ))}
       </ol>
-      <SteadyText className="ex-verdict" texts={rows.map((r, i) => `${i + 1}/${rows.length} · ${r.caption}`)} index={step} live={manual} />
+      {/* The highlighted row tells the story on screen; this says it for screen readers. */}
+      <SteadyText className="sr-only" texts={rows.map((r, i) => `${i + 1}/${rows.length} · ${r.caption}`)} index={step} live={manual} />
       <div className="ex-controls">
         <button className="btn" onClick={() => go(step - 1)}>
           [ ◀ BACK ]
@@ -390,7 +370,7 @@ export function HandshakeFigure() {
         <button className="btn" onClick={() => go(step + 1)}>
           [ NEXT ▶ ]
         </button>
-        <button className="btn" disabled={busy} onClick={() => void start()}>
+        <button className="btn" disabled={busy} onClick={again}>
           [ {busy ? 'RUNNING…' : '↻ NEW HANDSHAKE'} ]
         </button>
       </div>
@@ -400,9 +380,8 @@ export function HandshakeFigure() {
         </p>
       )}
       <figcaption>
-        Computed in your browser by the app's own code, with a random passphrase: real X25519 key pairs, the real session code,
-        and a real attempt by a listener that knows the passphrase but has only a key pair of its own. Every NEW HANDSHAKE
-        gives new keys and a new code.
+        Computed in your browser by chirp's own code, with a random passphrase: real key pairs, a real proof check, and a real
+        attempt by a listener with the passphrase but a key pair of its own. No sound is played.
       </figcaption>
     </figure>
   );
@@ -410,7 +389,7 @@ export function HandshakeFigure() {
 
 /* ── 8d · what a recording opens later ───────────────── */
 
-const LEAK_STEPS = ['today: a message goes out, and someone records it', 'a month later, the passphrase leaks', 'they play the recording back'];
+const LEAK_STEPS = ['today: a message goes out, and someone records it', 'a month later, the passphrase leaks', 'they try to decrypt the recording'];
 
 export function LeakFigure() {
   const { ref, step, manual, go } = useStepper(LEAK_STEPS.length, 2400);
@@ -427,19 +406,19 @@ export function LeakFigure() {
         <thead>
           <tr>
             <th scope="col" />
-            <th scope="col">PSK only</th>
+            <th scope="col">passphrase only</th>
             <th scope="col">two-way</th>
           </tr>
         </thead>
         <tbody>
           {row(0, 'sealed with the passphrase key', 'sealed with a session key')}
-          {row(1, 'the key can be rebuilt from it', 'the secrets it also needs were deleted')}
+          {row(1, 'the key can be rebuilt from it', 'the private keys it also needs were dropped')}
           {row(2, `✓ opens: "${MESSAGE}"`, '✗ stays sealed', 'err', 'ok')}
         </tbody>
       </table>
       <SteadyText className="ex-verdict" texts={LEAK_STEPS.map((s, i) => `${i + 1}/${LEAK_STEPS.length} · ${s}`)} index={step} live={manual} />
       <StepControls step={step} go={go} />
-      <figcaption>This is forward secrecy: a key that leaks tomorrow doesn't open what was said today.</figcaption>
+      <figcaption>Forward secrecy: learning the passphrase later doesn't unlock earlier two-way recordings.</figcaption>
     </figure>
   );
 }

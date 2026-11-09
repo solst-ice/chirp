@@ -8,7 +8,6 @@ import {
   ENCRYPTION_OVERHEAD,
   MAX_AGE_S,
   MAX_AHEAD_S,
-  PBKDF2_ITERATIONS,
   decryptFrame,
   deriveKey,
   encryptFrame,
@@ -19,9 +18,9 @@ import { FrameType } from '../modem/types';
 import { CRC_BYTES, HEADER_BYTES, LEAD_IN_SECONDS, PREAMBLE, TAIL_SECONDS, binOf, toneFrequency } from '../modem/mfsk';
 import { MODEMS, PROFILES, getModem } from '../modem/profiles';
 import Canvas, { type Draw } from './Canvas';
-import { SAMPLE_RATE, V1, V1_FREQUENCIES, V1_RANGE, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
+import { SAMPLE_RATE, V1, V1_FREQUENCIES, captureWindow, loudestHz, rng, spectrum, v1CharAt } from './dsp';
 import { FAST, FIRST_TEXT_SLOT, PREAMBLE_SLOTS, type Role, type SlotTone, fastFrame, slotTones, toneSet } from './frame';
-import { palette, useReducedMotion, useTicker, useVisible } from './hooks';
+import { palette, useReducedMotion, useStepper, useTicker, useVisible } from './hooks';
 import { playTone, playV1, stopSound, useSound } from './sound';
 
 const CELL = 8;
@@ -261,57 +260,6 @@ export function V1Figure() {
   );
 }
 
-/* ── 2b · version 1's character map, as a table ──────── */
-
-const pitch = (c: string) => V1_FREQUENCIES.get(c)!;
-const V1_TABLES: { caption: string; rows: [string, number][] }[] = [
-  { caption: 'letters', rows: [...'ABCD'].map((c) => [c, pitch(c)]) },
-  { caption: 'digits', rows: [...'1234'].map((c) => [c, pitch(c)]) },
-  { caption: 'symbols', rows: [...'!@#$'].map((c) => [c, pitch(c)]) },
-  {
-    caption: 'markers',
-    rows: [
-      ['start', V1.start],
-      ['end', V1.end],
-    ],
-  },
-];
-
-export function V1TableFigure() {
-  return (
-    <figure className="ex-figure">
-      <div className="ex-v1map">
-        {V1_TABLES.map((t) => (
-          <table key={t.caption}>
-            <caption>{t.caption}</caption>
-            <thead className="sr-only">
-              <tr>
-                <th scope="col">character</th>
-                <th scope="col">pitch</th>
-              </tr>
-            </thead>
-            <tbody>
-              {t.rows.map(([label, f]) => (
-                <tr key={label}>
-                  <th scope="row" className={label.length > 1 ? 'dim' : undefined}>
-                    {label}
-                  </th>
-                  <td>{hz(f)} Hz</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ))}
-      </div>
-      <figcaption>
-        A few of version 1's {V1_FREQUENCIES.size} characters, which spanned {hz(V1_RANGE[0])} to {hz(V1_RANGE[1])} Hz. Neighbours
-        are 100 Hz apart, and the markers have pitches no character uses. The receiver read the table backwards: hear{' '}
-        {hz(pitch('C'))} Hz, print C.
-      </figcaption>
-    </figure>
-  );
-}
-
 /* ── 3 · the FFT ─────────────────────────────────────── */
 
 export function FftFigure() {
@@ -457,7 +405,7 @@ export function NibbleFigure({ value, onChange }: { value: string; onChange: (s:
       <figcaption>
         Each character becomes one to four bytes (UTF-8). A byte is shown in hexadecimal, base 16, so {hex(b)} is {b}. Its two
         4-bit halves are shown in binary, then as a number from 0 to 15: {hex(b)} → {bits(b >> 4)} | {bits(b & 15)} →{' '}
-        {b >> 4} | {b & 15}. {total} bytes → {total * 2} nibbles, each one of 16 tones. Try lowercase or an emoji: version 1
+        {b >> 4} | {b & 15}. {total} bytes → {total * 2} nibbles, each one of 16 pitches. Try lowercase or an emoji: version 1
         had no pitch for them.
       </figcaption>
     </figure>
@@ -569,7 +517,7 @@ export function FrameFigure({ value }: { value: string }) {
 /* ── 5b+ · which pitch carries which bits ───────────── */
 
 const GROUP_COLORS = ['rx', 'tx', 'warn', 'accent'] as const;
-/** The real modem's pitch for a 4-bit value in a group, in a given slot (which picks tone set A or B). */
+/** The real modem's pitch for a 4-bit value in a group, in a given slot (which picks tone set 1 or 2). */
 const pitchOf = (value: number, group: number, slot: number) => toneFrequency(FAST, binOf(FAST, value, group, slot));
 
 const SOURCE_LABELS: Partial<Record<Role, string>> = { header: 'header', check: 'checksum', repair: 'repair byte' };
@@ -687,12 +635,13 @@ export function EchoFigure() {
   const rows = 8;
   const rowH = 16;
   const top = 22;
-  const label = (r: number) => `${r % 2 ? 'B' : 'A'}${r >> 1}`;
+  /** Each row's tone set: the sets interleave, one grid step apart. */
+  const label = (r: number) => `set ${(r % 2) + 1}`;
   const rowY = (r: number) => top + (rows - 1 - r) * rowH;
   const slot1 = { x: 40, w: 120 };
   const slot2 = { x: 190, w: 120 };
-  const sent1 = 2; // A1
-  const sent2 = alternate ? 5 : 4; // B2 or A2
+  const sent1 = 2; // set 1
+  const sent2 = alternate ? 5 : 4; // set 2, or set 1 again
   const listening = Array.from({ length: rows }, (_, r) => r).filter((r) => (alternate ? r % 2 === 1 : r % 2 === 0));
   return (
     <figure className="ex-figure">
@@ -728,8 +677,8 @@ export function EchoFigure() {
       </div>
       <p className={`ex-verdict ${alternate ? 'ok' : 'err'}`}>
         {alternate
-          ? 'The echo rings on A1, a row slot 2 does not read, so here it does not compete with the real tone.'
-          : 'The echo on A1 competes with the real tone on A2: slot 2 might be read as 1 instead of 2.'}
+          ? 'The echo rings on a set 1 pitch, which slot 2 does not read, so it does not compete with the real tone.'
+          : 'Slot 2 reads set 1 too, so the echo competes with the real tone: slot 2 might be read wrong.'}
       </p>
     </figure>
   );
@@ -817,21 +766,16 @@ const FEC_STEPS = [
   'sent interleaved: one byte from each block in turn',
   `a burst of noise wrecks ${BURST.size} bytes in a row`,
   `back in blocks, no block lost more than ${FEC_PARITY / 2}`,
-  'Reed–Solomon repairs every block, and the CRC-32 checksum confirms ✓',
+  'Reed–Solomon repairs every block, and the CRC-32 checksum passes ✓',
 ];
 
 export function FecFigure() {
-  const ref = useRef<HTMLElement>(null);
-  const visible = useVisible(ref);
-  const reduced = useReducedMotion();
-  // Steps on its own until the reader clicks; from then on the reader is in control.
-  const [manual, setManual] = useState<number | null>(null);
-  const tick = useTicker(1800, visible && !reduced && manual === null);
-  const step = manual ?? tick % FEC_STEPS.length;
+  // Steps on its own until the reader clicks; with reduced motion it rests on the repaired result.
+  const { ref, step, manual, go } = useStepper(FEC_STEPS.length, 1800);
   const inLine = step === 1 || step === 2;
   return (
     <figure className="ex-figure" ref={ref}>
-      <button className="ex-fec" onClick={() => setManual((step + 1) % FEC_STEPS.length)} aria-label="Next step">
+      <button className="ex-fec" onClick={() => go(step + 1)} aria-label="Next step">
         {Array.from({ length: FEC_TOTAL }, (_, i) => {
           const b = i % FEC_BLOCKS;
           const j = Math.floor(i / FEC_BLOCKS);
@@ -853,7 +797,7 @@ export function FecFigure() {
         className="ex-verdict"
         texts={FEC_STEPS.map((s, i) => `${i + 1}/${FEC_STEPS.length} · ${s}`)}
         index={step}
-        live={manual !== null}
+        live={manual}
       />
       <figcaption>
         Simplified, with tiny blocks so it fits. Without interleaving the burst would land in one block: {BURST.size} bad
@@ -900,7 +844,8 @@ export function FilesFigure() {
 /* ── 5g · modes ──────────────────────────────────────── */
 
 const SPECTRUM_TOP = 20000;
-const goodput = (id: string) => Math.round(800 / getModem(id).airtime(100));
+/** Seconds to send a 100-byte message, start pattern and repair bytes included. */
+const seconds100 = (id: string) => getModem(id).airtime(100).toFixed(1);
 
 export function ModesFigure() {
   return (
@@ -921,7 +866,7 @@ export function ModesFigure() {
                 </span>{' '}
                 {/* Non-breaking spaces keep each value with its unit when the line wraps. */}
                 · {profile.groups}&nbsp;tone{profile.groups > 1 ? 's' : ''} · {Math.round((profile.symbolSeconds + profile.guardSeconds) * 1000)}
-                &nbsp;ms · ~{goodput(m.id)}&nbsp;b/s
+                &nbsp;ms · 100&nbsp;bytes in&nbsp;{seconds100(m.id)}&nbsp;s
               </span>
             </div>
           );
@@ -938,10 +883,7 @@ export function ModesFigure() {
           <span />
         </div>
       </div>
-      <figcaption>
-        b/s is the speed of the message itself, in bits per second, for a 100-byte message: the time also spent on the sync
-        pattern, header, checksum and repair bytes is counted against it.
-      </figcaption>
+      <figcaption>Times include the start pattern and repair bytes.</figcaption>
     </figure>
   );
 }
@@ -975,13 +917,6 @@ function duration(s: number): string {
 
 const GUESS_ROWS: { name: string; note: string; keys: number; rate: number; tone: string }[] = [
   { name: 'a known phrase', note: 'a lyric, quote or saying: one of maybe a billion', keys: 1e9, rate: GUESSES_PER_SECOND, tone: 'err' },
-  {
-    name: '5 random words',
-    note: `from a 7,776-word list, but hashed once instead of ${PBKDF2_ITERATIONS.toLocaleString('en-US')} times`,
-    keys: 7776 ** 5,
-    rate: GUESSES_PER_SECOND * PBKDF2_ITERATIONS,
-    tone: 'warn',
-  },
   { name: '5 random words', note: 'from a 7,776-word list', keys: 7776 ** 5, rate: GUESSES_PER_SECOND, tone: 'rx' },
   { name: 'GENERATE', note: '25 random characters', keys: 32 ** 25, rate: GUESSES_PER_SECOND, tone: 'tx' },
 ];
@@ -995,7 +930,6 @@ const GUESS_MARKS = [
 ];
 
 export function GuessFigure() {
-  const words = guessSeconds(GUESS_ROWS[2]);
   return (
     <figure className="ex-figure">
       <div className="ex-modes ex-guess">
@@ -1025,12 +959,9 @@ export function GuessFigure() {
         ))}
       </div>
       <figcaption>
-        An illustrative model, not a benchmark. It assumes {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a second against{' '}
-        {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds of PBKDF2, and shows the average time to find the key; the hashed-once
-        row simply multiplies that rate by {PBKDF2_ITERATIONS.toLocaleString('en-US')}. Real phrases do worse than their bar:
-        attackers try the likeliest first, so a popular one can fall in seconds. Each step along the bars is ten times longer,
-        and a thousand times the guessing power divides every time by a thousand: the random words would still take{' '}
-        {duration(words / 1000)}.
+        Illustrative, not a benchmark: the average time to find the key at {GUESSES_PER_SECOND.toLocaleString('en-US')} guesses a
+        second against PBKDF2. Real phrases do worse than their bar, since attackers try popular ones first. Each step along the
+        bars is ten times longer.
       </figcaption>
     </figure>
   );

@@ -12,11 +12,11 @@ const FAST = PROFILES[0];
 const enc = new TextEncoder();
 
 describe('guide pitch figure', () => {
-  test('"H" shares its slot with the first checksum byte, in tone set B', () => {
+  test('"H" shares its slot with the first checksum byte, in tone set 2', () => {
     const frame = fastFrame(enc.encode('H'));
     const tones = slotTones(frame, FIRST_TEXT_SLOT);
     assert.equal(FIRST_TEXT_SLOT, 13);
-    assert.equal(toneSet(FIRST_TEXT_SLOT), 'B');
+    assert.equal(toneSet(FIRST_TEXT_SLOT), 2);
     assert.deepEqual(
       tones.map((t) => [t.byte, t.role, t.half]),
       [

@@ -1,7 +1,54 @@
-import { createContext, useEffect, useState, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type RefObject } from 'react';
 
 /** How much presentation mode enlarges the current slide (CSS zoom); 1 in the article. */
 export const SlideZoom = createContext(1);
+
+/** A figure's steps, as presentation mode's keys see them. */
+export interface SlideStepper {
+  step: number;
+  count: number;
+  go: (n: number) => void;
+}
+
+/**
+ * Set by presentation mode: the stepping figure on the current slide, if any.
+ * The forward key reveals its next step before moving on to the next slide.
+ */
+export const SlideSteps = createContext<{ current: SlideStepper | null } | null>(null);
+
+/**
+ * Steps on its own while on screen, until the reader takes over with BACK or
+ * NEXT. With reduced motion it stands still on `restAt`: by default the last
+ * step, which for a figure that builds up shows everything at once. While
+ * presenting it waits on step one for the presenter.
+ */
+export function useStepper(count: number, ms: number, restAt = count - 1) {
+  const ref = useRef<HTMLElement>(null);
+  const visible = useVisible(ref);
+  const reduced = useReducedMotion();
+  const slideSteps = useContext(SlideSteps);
+  const presenting = slideSteps !== null;
+  const [manual, setManual] = useState<number | null>(null);
+  const [base, setBase] = useState(0);
+  const tick = useTicker(ms, visible && !reduced && !presenting && manual === null);
+  const step = manual ?? (presenting ? 0 : reduced ? restAt : (tick - base) % count);
+  const go = (n: number) => setManual(((n % count) + count) % count);
+  /** Back to step one: autoplaying again, or waiting there for the presenter. */
+  const reset = () => {
+    setBase(tick);
+    setManual(presenting ? 0 : null);
+  };
+  useEffect(() => {
+    if (slideSteps) slideSteps.current = { step, count, go };
+  });
+  useEffect(
+    () => () => {
+      if (slideSteps) slideSteps.current = null;
+    },
+    [slideSteps],
+  );
+  return { ref, step, manual: manual !== null, go, reset };
+}
 
 /** True while the element is on screen; animations pause otherwise, leaving the main thread to the demodulators. */
 export function useVisible(ref: RefObject<Element>): boolean {

@@ -19,7 +19,6 @@ import {
   SyncFigure,
   ToneFigure,
   V1Figure,
-  V1TableFigure,
 } from './figures';
 import { HandshakeFigure, LeakFigure, MixFigure, PaintFigure } from './dhFigures';
 import Presentation, { type Slide } from './Presentation';
@@ -42,6 +41,16 @@ function Fix({ id, title, children }: { id?: string; title: string; children: Re
   );
 }
 
+/** Optional detail in the article, closed until asked for; slides leave it out. */
+function More({ summary, children }: { summary: string; children: React.ReactNode }) {
+  return (
+    <details className="ex-more">
+      <summary>{summary}</summary>
+      {children}
+    </details>
+  );
+}
+
 /**
  * One slide-sized piece of the article: a numbered section, or a part of one
  * (a version 2 fix, or a closer look). The article shows them in order;
@@ -53,12 +62,14 @@ interface Block {
   kind?: 'fix' | 'detail';
   /** The numbered section a part belongs to, shown above it on its slide. */
   kicker?: string;
+  /** The block's point in a line, shown only on its slide, in place of the prose (marked ex-prose). */
+  takeaway?: React.ReactNode;
   body: React.ReactNode;
 }
 
 const FIXES_HEADING = '5 · Version 2, one fix at a time';
 const ENCRYPTION_HEADING = '7 · Encryption';
-const TWO_WAY_HEADING = '8 · Two-way: a key that never goes on air';
+const TWO_WAY_HEADING = '8 · Two-way: protecting old recordings';
 
 export default function Explainer() {
   const [demo, setDemo] = useState('Hi ✓');
@@ -78,21 +89,23 @@ export default function Explainer() {
             <h1 id="explainer-title">HOW CHIRP WORKS</h1>
           </header>
           <p className="ex-dek">
-            Two devices, a speaker and a microphone, no network. This is how text turns into sound and back, starting with the
-            simplest version that works.
+            Two devices, a speaker and a microphone, no network. This is how it works, starting with the simplest version that
+            does:
           </p>
+          <p className="ex-path">text → bytes → tones → air → bytes → text</p>
         </>
       ),
     },
     {
       id: 'sound',
       title: '1 · Sound is a list of numbers',
+      takeaway: 'A tone is a wave at one frequency. More cycles per second means a higher pitch.',
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             A speaker pushes air back and forth; a microphone measures that push thousands of times a second. The simplest sound
             is a pure tone: a smooth wave repeating at one <em>frequency</em>, counted in hertz (Hz, cycles per second). More
-            cycles per second sounds higher.
+            cycles per second means a higher pitch.
           </p>
           <ToneFigure />
         </>
@@ -101,15 +114,13 @@ export default function Explainer() {
     {
       id: 'version-1',
       title: '2 · Version 1: one pitch per character',
+      takeaway: 'Every character gets its own pitch, 100 Hz apart.',
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             So give every character its own pitch. The first chirp did exactly that: A was 5,700 Hz, B 5,800 Hz and so on, 100
-            Hz apart. A message was a start tone, one short tone per character, then an end tone. Each character also sounded a
-            quieter second tone {V1.partnerOffset} Hz above its pitch, close enough that the receiver counted both as the same
-            character.
+            Hz apart. A message was a start tone, one short tone per character, then an end tone.
           </p>
-          <V1TableFigure />
           <V1Figure />
         </>
       ),
@@ -117,15 +128,16 @@ export default function Explainer() {
     {
       id: 'fft',
       title: '3 · Hearing it: the FFT',
+      takeaway: 'The FFT splits sound into frequencies. Too much noise, and the wrong letter wins.',
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             The receiver doesn't get pitches, only that stream of numbers. A <em>Fast Fourier Transform</em> (FFT) takes a short
             slice of them (2,048 samples, about 43 ms) and measures how much of every frequency it contains, like a prism
             splitting light into colours. Version 1 took the loudest frequency and looked up the nearest character.
           </p>
           <FftFigure />
-          <p>
+          <p className="ex-prose">
             Push the hiss up: the FFT still finds a tone quieter than the noise around it, but past a point a random spike wins
             and the wrong letter comes out, with nothing to say it's wrong.
           </p>
@@ -139,7 +151,7 @@ export default function Explainer() {
         <>
           <ul className="ex-list">
             <li>It could only send capitals, digits and some symbols: no lowercase, emoji or files.</li>
-            <li>Two equal letters in a row sounded like one long letter, so doubles often lost a letter.</li>
+            <li>Doubles often lost a letter: the receiver ignored a repeat that came too soon.</li>
             <li>Rooms echo: each tone kept ringing into the next one.</li>
             <li>It checked for tones on every screen refresh, which slows or stops when the tab is in the background.</li>
             <li>A misheard letter looked exactly like a correct one.</li>
@@ -153,7 +165,7 @@ export default function Explainer() {
       title: FIXES_HEADING,
       body: (
         <>
-          <p>Today's modem keeps the core idea, tones a microphone can pick out, and fixes each of those problems.</p>
+          <p>Today's modem still uses tones, and fixes each of those problems.</p>
         </>
       ),
     },
@@ -162,12 +174,13 @@ export default function Explainer() {
       title: 'Bytes instead of characters',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: 'Send bytes. Each byte is two 4-bit nibbles, and each nibble is one of 16 pitches.',
       body: (
         <>
-          <p>
-            Everything a computer stores is bytes, so send bytes. Each byte splits into two 4-bit halves called{' '}
-            <em>nibbles</em>. A nibble has only 16 possible values, so 16 tones can carry anything. Type here; the next figure
-            uses it too.
+          <p className="ex-prose">
+            Everything a computer stores is bytes, so send bytes. A byte is 8 bits, split into two 4-bit halves called{' '}
+            <em>nibbles</em>. A nibble has 16 possible values, so each one needs one of 16 pitches. Type here; the figures below
+            use your text.
           </p>
           <NibbleFigure value={demo} onChange={setDemo} />
         </>
@@ -178,14 +191,14 @@ export default function Explainer() {
       title: 'Fixed time slots, four tones at once',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: 'Fixed 30 ms slots with four tones each: two bytes per slot.',
       body: (
         <>
-          <p>
-            Sound is cut into fixed slots: 30 ms each in FAST. Each slot holds its tones steady for 20 ms, the stretch the
-            receiver measures, with 5 ms fades at either end so one slot blends into the next without clicks. Two equal values
-            are simply two slots, so doubles survive. Each slot sounds four tones at once, each carrying one nibble, so a slot
-            carries two bytes. The receiver knows when each slot starts and which pitches it can contain, so it measures just
-            those, instead of scanning the whole spectrum.
+          <p className="ex-prose">
+            Sound is cut into fixed slots, 30 ms each in FAST. The receiver measures the middle 20 ms; 5 ms fades at each end
+            avoid clicks. Two equal values are simply two slots, so doubles survive. Four tones carry four nibbles: two bytes per
+            slot. The receiver knows when each slot starts and which pitches it can hold, so it measures just those. All the
+            slots of one message, from the start pattern to the last repair byte, make up a <em>frame</em>.
           </p>
           <FrameFigure value={demo} />
         </>
@@ -196,33 +209,30 @@ export default function Explainer() {
       title: 'Which pitch means which bits',
       kind: 'detail',
       kicker: FIXES_HEADING,
+      takeaway: 'Each tone has its own 16 pitches, so the four never collide.',
       body: (
         <>
-          <p>
-            Each tone carries 4 bits, so it needs 16 pitches, one for every value from 0000 to 1111. Three spacings, from fine
-            to coarse, decide where they go (these are FAST's numbers):
-          </p>
-          <ul className="ex-list ex-points">
-            <li>
-              <em>50 Hz, the grid.</em> Every pitch sits on a 50 Hz step. Over the receiver's 20 ms window, a tone one
-              step higher fits exactly one more cycle (1 ÷ 20 ms = 50 Hz), so ideally measuring one step picks up nothing from
-              its neighbours. In a real room, echoes and speakers blur that a little.
-            </li>
-            <li>
-              <em>100 Hz, within a slot.</em> A slot uses only every other step: tone set A, or tone set B one step up
-              (the next fix explains why). The four tones take its pitches in turn: tone 1 at 1,500 Hz, tone 2 at 1,600, tone 3
-              at 1,700, tone 4 at 1,800, then tone 1 again at 1,900.
-            </li>
-            <li>
-              <em>400 Hz, between values.</em> So each tone's own 16 pitches are 400 Hz apart: tone 1 plays 1,500 Hz
-              for 0000, 1,900 Hz for 0001, and so on up to 7,500 Hz for 1111.
-            </li>
-          </ul>
-          <p>
-            Because the four tones never share a pitch, even when they carry the same bits, the receiver reads each one as if it
-            were alone.
+          <p className="ex-prose">
+            Each tone has its own 16 pitches, one per value from 0000 to 1111, and the four tones never share a pitch, so the
+            receiver can measure them separately.
           </p>
           <PitchFigure value={demo} />
+          <More summary="why these pitches?">
+            <ul className="ex-list ex-points">
+              <li>
+                <em>50 Hz, the grid.</em> Over the receiver's 20 ms window, a tone one 50 Hz step higher fits exactly one more
+                cycle, so measuring one step ideally picks up nothing from its neighbours.
+              </li>
+              <li>
+                <em>100 Hz, within a slot.</em> A slot uses every other step: tone set 1, or set 2 one step up. The four tones
+                take turns: tone 1 at 1,500 Hz, tone 2 at 1,600, tone 3 at 1,700, tone 4 at 1,800, then tone 1 again at 1,900.
+              </li>
+              <li>
+                <em>400 Hz, between values.</em> So each tone's own pitches are 400 Hz apart: tone 1 plays 1,500 Hz for 0000,
+                1,900 Hz for 0001, and so on up to 7,500 Hz for 1111.
+              </li>
+            </ul>
+          </More>
         </>
       ),
     },
@@ -231,11 +241,12 @@ export default function Explainer() {
       title: 'Dodging echoes',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: "Slots alternate between two sets of pitches, so an echo lands where the next slot isn't listening.",
       body: (
         <>
-          <p>
-            Slots alternate between tone set A and tone set B, the two halves of the 50 Hz grid. When a tone echoes into the
-            next slot, it rings on a pitch that slot doesn't use, so the receiver isn't reading it.
+          <p className="ex-prose">
+            Slots alternate between two tone sets, interleaved 50 Hz apart. An echo from one slot rings on pitches the next slot
+            doesn't read, which reduces interference. A long echo can still reach a later slot.
           </p>
           <EchoFigure />
         </>
@@ -246,12 +257,13 @@ export default function Explainer() {
       title: 'Finding the start, and keeping time',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: 'A known start pattern to lock on to, and timing taken from the audio itself.',
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             Every message begins with 8 slots of a known pattern. The receiver slides that pattern along everything it hears and
-            locks on where it matches. No two devices' clocks agree exactly, so it also checks each slot slightly early and
-            slightly late and nudges its timing toward the stronger reading.
+            locks on where it matches. Device clocks drift, so it also checks each slot slightly early and late, then adjusts
+            its timing. And it times everything by audio samples, not screen refreshes.
           </p>
           <SyncFigure />
         </>
@@ -262,15 +274,14 @@ export default function Explainer() {
       title: 'Fixing mistakes',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: 'Repair bytes fix misheard tones; interleaving spreads a burst of noise thin.',
       body: (
         <>
-          <p>
-            Some tones will still be misheard. <em>Reed–Solomon</em> error correction adds repair bytes: in FAST, each block of
-            up to 96 data bytes gets 16, enough to rebuild any 8 wrong bytes in it (more when the receiver can tell which
-            readings were doubtful). A short message is a single, smaller block, so its repair bytes are a larger share. Longer
-            messages are split into blocks whose bytes are interleaved, so a burst of noise like a cough or a door hurts each
-            block only a little. A final <em>CRC-32</em> checksum confirms the result; a message that fails it is marked
-            corrupted instead of passed off as correct.
+          <p className="ex-prose">
+            Some tones will still be misheard. <em>Reed–Solomon</em> error correction adds repair bytes: in FAST, 16 for each
+            block of up to 96 data bytes, enough to fix any 8 wrong bytes. Longer messages are split into blocks whose bytes are
+            interleaved, so a burst of noise, like a cough, hurts each block only a little. A final <em>CRC-32</em> checksum
+            checks for remaining errors; a message that fails it is marked corrupted.
           </p>
           <FecFigure />
         </>
@@ -281,12 +292,13 @@ export default function Explainer() {
       title: 'Files',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: 'Numbered chunks and a manifest. A resend fills in the gaps.',
       body: (
         <>
-          <p>
-            A file is compressed when that makes it smaller, cut into numbered chunks, and announced by a manifest sent both
-            first and last. Chunks can arrive in any order. RESEND plays the whole file again, and the receiver keeps what it
-            already has and fills in what it missed.
+          <p className="ex-prose">
+            chirp compresses a file if that saves space, then splits it into numbered chunks. A manifest describing the file is
+            sent first and last. Chunks can arrive in any order. RESEND plays the whole file again; the receiver keeps what it
+            has and fills in what it missed.
           </p>
           <FilesFigure />
         </>
@@ -297,13 +309,13 @@ export default function Explainer() {
       title: 'Three modes',
       kind: 'fix',
       kicker: FIXES_HEADING,
+      takeaway: "FAST for speed, ROBUST for noisy rooms, INAUDIBLE above most adults' hearing.",
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             FAST uses the most tones. ROBUST uses fewer tones and longer slots for noisy, echoey rooms. INAUDIBLE sits at 18–19
-            kHz, above what most adults hear, with one tone at a time, because two high tones together can produce an audible
-            buzz in small speakers. The receiver listens for all three at once. A fourth choice, ENCRYPTED, plays FAST's
-            tones; section 7 explains it.
+            kHz, above what most adults hear, with one tone at a time, because two high tones together can buzz audibly in small
+            speakers. The receiver listens for all three at once. ENCRYPTED (section 7) uses FAST's tones.
           </p>
           <ModesFigure />
         </>
@@ -331,7 +343,7 @@ export default function Explainer() {
               <tr>
                 <th scope="row">"HELLO"</th>
                 <td>{v1Seconds(5).toFixed(2)} s</td>
-                <td>{v2Seconds(5).toFixed(2)} s, including repair bytes</td>
+                <td>{v2Seconds(5).toFixed(2)} s</td>
               </tr>
               <tr>
                 <th scope="row">100 ASCII characters</th>
@@ -345,6 +357,7 @@ export default function Explainer() {
               </tr>
             </tbody>
           </table>
+          <p>Short messages pay for the start pattern and repair bytes; longer ones show the speed-up.</p>
           <div className="ex-controls">
             <DemoButton id="v1" label="HELLO, VERSION 1" play={(id) => playV1(id, 'HELLO')} />
             <DemoButton id="v2" label="HELLO, VERSION 2" play={(id) => playV2(id, 'HELLO')} />
@@ -359,8 +372,9 @@ export default function Explainer() {
     {
       id: 'encryption',
       title: ENCRYPTION_HEADING,
+      takeaway: 'Sound is a broadcast. ENCRYPTED seals each frame, so only a device with the key can read it.',
       body: (
-        <p>
+        <p className="ex-prose">
           Sound is a broadcast: everyone in earshot hears every message, and anyone can send one. ENCRYPTED mode keeps FAST's
           tones but seals each frame first, so only a device with the same key, agreed in advance, can read it, or send a frame
           it will accept. The sync, header and repair bytes work as before: encryption sits on top of the modem, not inside it.
@@ -372,14 +386,14 @@ export default function Explainer() {
       title: 'From a passphrase to a key',
       kind: 'detail',
       kicker: ENCRYPTION_HEADING,
+      takeaway: 'Anyone with a recording can guess offline. A generated key makes that hopeless.',
       body: (
         <>
-          <p>
-            Both devices type the same passphrase. <em>PBKDF2</em> hashes it {PBKDF2_ITERATIONS.toLocaleString('en-US')} times
-            into a 256-bit key; the key itself never goes on air. That takes a moment, once per passphrase. It matters because
-            anyone who records a transmission can try passphrases offline for as long as they like, and every guess costs them
-            the same {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds. What's left to protect you is how many passphrases
-            they might have to try.
+          <p className="ex-prose">
+            Both devices type the same passphrase. <em>PBKDF2</em> turns it into a 256-bit key with{' '}
+            {PBKDF2_ITERATIONS.toLocaleString('en-US')} rounds of hashing; the key itself never goes on air. A recording lets
+            anyone test passphrases offline, and those rounds make each guess slow. Security still depends on how hard the
+            passphrase is to guess.
           </p>
           <GuessFigure />
         </>
@@ -390,27 +404,27 @@ export default function Explainer() {
       title: 'Sealing a frame',
       kind: 'detail',
       kicker: ENCRYPTION_HEADING,
+      takeaway: 'A random nonce, the scrambled data, and a tag that catches a wrong key or any change.',
       body: (
         <>
-          <p>
+          <p className="ex-prose">
             Each frame is sealed on its own with <em>AES-256-GCM</em>, so file chunks can still arrive in any order. The inside
             holds the frame's real type, the time it was sent, and the data. Around it go:
           </p>
-          <ul className="ex-list ex-points">
+          <ul className="ex-list ex-points ex-prose">
             <li>
-              <em>a nonce:</em> 12 random bytes, new for every frame, so the same text never sounds the same twice;
+              <em>a nonce:</em> 12 random bytes, new for every frame, so repeated messages encrypt differently;
             </li>
             <li>
               <em>the ciphertext:</em> the inside, scrambled with the key and the nonce, byte for byte the same length;
             </li>
             <li>
-              <em>a tag:</em> 16 bytes computed from the key and every other byte. Change anything, or open it with another key,
-              and it no longer matches.
+              <em>a tag:</em> 16 bytes that let the receiver detect a wrong key or any change to the frame.
             </li>
           </ul>
-          <p>
-            {ENCRYPTION_OVERHEAD} bytes in all, about {(v2Seconds(100 + ENCRYPTION_OVERHEAD) - v2Seconds(100)).toFixed(1)} s more
-            sound for a 100-byte message in FAST. The text here is the same as in section 5.
+          <p className="ex-prose">
+            {ENCRYPTION_OVERHEAD} extra bytes per frame: about{' '}
+            {(v2Seconds(100 + ENCRYPTION_OVERHEAD) - v2Seconds(100)).toFixed(1)} s more sound for a 100-byte message in FAST.
           </p>
           <SealFigure value={demo} onChange={setDemo} />
         </>
@@ -421,14 +435,14 @@ export default function Explainer() {
       title: 'Opening it',
       kind: 'detail',
       kicker: ENCRYPTION_HEADING,
+      takeaway: 'Four checks, in order. A frame is shown only if it passes all four.',
       body: (
         <>
-          <p>The receiver runs four checks in order, and shows a frame only if it passes all of them.</p>
+          <p className="ex-prose">The receiver runs four checks in order, and shows a frame only if it passes all of them.</p>
           <GatesFigure />
-          <p>
+          <p className="ex-prose">
             What it can't hide: that something was sent, when, for how long, and in which mode. Anyone with the passphrase can
-            read every message and send ones that look genuine, and a passphrase that leaks later opens old recordings too.
-            Section 8 is about that last one.
+            read every message and send ones that look genuine. And a passphrase that leaks later opens old recordings too.
           </p>
         </>
       ),
@@ -436,25 +450,19 @@ export default function Explainer() {
     {
       id: 'two-way',
       title: TWO_WAY_HEADING,
+      takeaway: 'A leaked passphrase opens old recordings. TWO-WAY adds a fresh secret for each session.',
       body: (
         <>
-          <p>
-            Section 7 has one weak spot. Every message, today's and next year's, is locked with the same key, made from the
-            passphrase. Anyone can keep a recording, and if the passphrase ever leaks, every recording opens.
+          <p className="ex-prose">
+            With passphrase-only encryption, anyone can keep a recording, and a passphrase that leaks later opens it. TWO-WAY adds
+            a fresh shared secret for each session, so learning the passphrase later is no longer enough. This is called{' '}
+            <em>forward secrecy</em>.
           </p>
-          <p>
-            TWO-WAY fixes that. Before the first message, the two devices agree on a fresh key, out loud, in front of anyone
-            listening, in a way that leaves the listener unable to work it out. Then both throw away what they used to make it.
-            The trick is called <em>Diffie–Hellman key exchange</em>, after Whitfield Diffie and Martin Hellman, who published
-            it in 1976.
-          </p>
-          <p>
-            It doesn't replace the passphrase. Both devices still need the same one, and it still does a job of its own: the
-            fresh key is made from the exchange and the passphrase together.
-          </p>
-          <p>
-            The price is that both devices have to talk: the receiver needs a working speaker as well as a microphone, and the
-            sender needs a microphone to hear the answer.
+          <LeakFigure />
+          <p className="ex-prose">
+            The two devices agree on that secret out loud, in a way a listener can't work out: <em>Diffie–Hellman key
+            exchange</em>. chirp combines it with the passphrase to make the session keys. Both devices need TWO-WAY on, the same
+            passphrase, and a working speaker and microphone.
           </p>
         </>
       ),
@@ -464,33 +472,20 @@ export default function Explainer() {
       title: 'Mixing paint',
       kind: 'detail',
       kicker: TWO_WAY_HEADING,
+      takeaway: 'Both sides end up with the same colour. The listener, who heard only the mixes, cannot.',
       body: (
         <>
-          <p>
-            The usual way to picture it uses paint. Mixing two colours is easy; looking at a mix and saying exactly what went
-            into it is not. That one-way step is all Diffie–Hellman needs.
+          <p className="ex-prose">
+            The usual picture uses paint. Two things make it work: mixing in either order gives the same colour, and a mix
+            doesn't reveal what went into it.
           </p>
           <PaintFigure />
-          <p>
-            Both devices end up with the same colour, made from the common colour and both secrets, yet neither secret ever left
-            its device. The listener heard every mix but never a secret, and without one it can't make the final colour.
+          <p className="ex-prose">
+            Real Diffie–Hellman mixes numbers. A secret colour is a <em>private key</em>, kept on the device; a mix is a{' '}
+            <em>public key</em>, sent over the air. chirp uses <em>X25519</em>: both devices compute the shared secret in a
+            moment, but working it out from the public keys alone is impractical.
           </p>
         </>
-      ),
-    },
-    {
-      id: 'scale',
-      title: "Why a listener can't unmix it",
-      kind: 'detail',
-      kicker: TWO_WAY_HEADING,
-      body: (
-        <p>
-          Real Diffie–Hellman mixes numbers, not paint. chirp uses <em>X25519</em>, where each secret and each public half is
-          a 32-byte number, about 77 digits long. Making the public half from a secret, or the shared secret from a secret and
-          the other public half, takes a device a moment. Going back from a public half to its secret is the unmixing, and the
-          best known way takes about 2<sup>126</sup> steps: at a billion billion steps a second, roughly 200 times the age of
-          the universe.
-        </p>
       ),
     },
     {
@@ -498,24 +493,18 @@ export default function Explainer() {
       title: 'Where the passphrase comes in',
       kind: 'detail',
       kicker: TWO_WAY_HEADING,
+      takeaway: 'The session keys need both the passphrase and the exchange.',
       body: (
         <>
-          <p>
-            PBKDF2 still turns the passphrase into a key, exactly as in section 7. What changes is what that key does. Without
-            TWO-WAY it seals every frame itself. With TWO-WAY it is one of two ingredients of the session keys; the other is
-            the shared secret from the exchange. Each device stirs the two together (with HMAC, then HKDF) into a key for each
-            direction and a short proof.
+          <p className="ex-prose">
+            PBKDF2 still turns the passphrase into a key, as in section 7. With TWO-WAY, that key no longer seals frames itself:
+            each device combines it with the shared secret to make the session keys.
           </p>
           <MixFigure />
-          <p>
-            Each ingredient stops someone different. The shared secret stops anyone who only listens, even one who learns the
-            passphrase later. The passphrase stops anyone who joins in: Diffie–Hellman on its own makes a secret with whoever
-            answers, so without the passphrase a stranger could answer A's hello and pass for B. With it mixed in, the
-            stranger's keys don't match, its proof fails, and A sends nothing.
-          </p>
-          <p>
-            One detail: the hello carries nothing made from the passphrase. If it did, a recording of the hello alone would be
-            enough to test passphrase guesses offline, the weakness section 7 describes.
+          <p className="ex-prose">
+            Each input stops someone different. The shared secret stops a listener, even one who learns the passphrase later.
+            The passphrase stops a stranger who answers A's hello: without it, the stranger's keys differ, its proof fails, and
+            A sends nothing.
           </p>
         </>
       ),
@@ -525,109 +514,117 @@ export default function Explainer() {
       title: 'How chirp does it',
       kind: 'detail',
       kicker: TWO_WAY_HEADING,
+      takeaway: 'Hello, then a reply with a proof, and only then the sealed message.',
       body: (
         <>
-          <p>
-            With TWO-WAY on, the first send starts with a <em>handshake</em>. The device sending is A; the one answering is B.
+          <p className="ex-prose">
+            With TWO-WAY on, the first send starts with a <em>handshake</em>. A is the device sending; B answers.
           </p>
           <HandshakeFigure />
-          <p>
-            The two devices take turns: each waits a moment after the other stops, because a device ignores its own microphone
-            briefly after playing, so as not to decode its own echo.
-          </p>
-          <p>
-            The session is reused in both directions for 40 minutes; after that, the next send starts a new one. Both screens
-            show the session code. Matching codes mean the same session, though not who is on the other end.
+          <p className="ex-prose">
+            Each device pauses before replying, giving the other's microphone time to listen again. With no valid reply, the
+            send fails; it never falls back to passphrase-only encryption. The session is reused for 40 minutes; after that,
+            the next send starts a new one.
           </p>
         </>
       ),
     },
     {
-      id: 'leak',
-      title: 'What a recording opens later',
+      id: 'limits-two-way',
+      title: "What two-way doesn't fix",
       kind: 'detail',
       kicker: TWO_WAY_HEADING,
       body: (
-        <>
-          <LeakFigure />
-          <p>What two-way doesn't fix:</p>
-          <ul className="ex-list">
-            <li>
-              Someone who knows the passphrase and gets between the two devices while they talk, by being louder than one of
-              them or jamming it, can run a handshake with each and read everything.
-            </li>
-            <li>
-              Someone who sends their own hello and gets an answer can then guess passphrases offline, as with a recording in
-              section 7. A generated key still matters.
-            </li>
-            <li>
-              A recording, the passphrase and a large enough quantum computer, if one is ever built, could open it: X25519 isn't
-              designed to resist one.
-            </li>
-            <li>As before, that something was sent, when, and for how long, is plain to hear.</li>
-          </ul>
-        </>
+        <ul className="ex-list">
+          <li>
+            Someone with the passphrase who gets between the devices while they talk, by being louder than one or jamming it,
+            can run a separate handshake with each and read everything.
+          </li>
+          <li>
+            Someone who sends their own hello and gets a reply can test passphrase guesses offline. A generated key still
+            matters.
+          </li>
+          <li>
+            It isn't post-quantum: a large enough quantum computer, plus a recording and the passphrase, could open it.
+          </li>
+          <li>As before, that something was sent, when, and for how long, is plain to hear.</li>
+        </ul>
       ),
     },
     {
       id: 'using',
       title: '9 · Using it',
+      takeaway: (
+        <ul className="ex-list">
+          <li>Start with FAST.</li>
+          <li>Check the receiver: "sent" only means the sound played.</li>
+          <li>For privacy: ENCRYPTED with a generated key, and TWO-WAY to protect old recordings.</li>
+        </ul>
+      ),
       body: (
-        <ul className="ex-list ex-points">
+        <ul className="ex-list ex-points ex-prose">
           <li>
-            Start with FAST. If a message arrives corrupted, or not at all, send it again in ROBUST: slower, but steadier in
-            noisy or echoey rooms. The receiver listens for every mode at once, so only the sender has to switch.
+            Start with FAST. If an unencrypted message arrives corrupted, or not at all, send it again in ROBUST: slower, but
+            steadier in noisy or echoey rooms. The receiver listens for every mode at once, so only the sender has to switch.
           </li>
           <li>
             Keep chirp in front on the receiving device, with the screen on. Browsers may pause the microphone in a background
             tab or when the screen locks.
           </li>
           <li>
-            Check the receiving device. Sending is one-way: nothing replies, so "sent" means the sound played, not that anything
-            heard it. A message has arrived once the receiver's log shows it complete.
+            Check the receiving device. There's no delivery receipt, even with TWO-WAY: "sent" means the sound played, not that
+            anything heard it. A message has arrived once the receiver's log shows it complete.
           </li>
           <li>
             Before relying on INAUDIBLE, press TEST on each device: many speakers and microphones barely reproduce 18–19 kHz,
-            and Bluetooth audio doesn't carry it. And it is inaudible only to most adults. Children, teenagers and pets such as
-            dogs and cats can hear it, and it may bother them.
+            and Bluetooth audio often filters it out. And it is inaudible only to most adults. Children, teenagers and pets such
+            as dogs and cats can hear it, and it may bother them.
           </li>
           <li>
             Treat every message as public unless it was sent in ENCRYPTED. Anyone within earshot running chirp receives it, and
-            the checksum shows that the data arrived intact, not who sent it.
+            the checksum catches damage, not who sent it.
           </li>
           <li>
-            For private messages, pick ENCRYPTED, press GENERATE, and read the key out to the other person face to face, never
-            over chirp. Enter it on both devices before sending: frames heard without the key are lost, and have to be sent
-            again.
+            For private messages, pick ENCRYPTED, press GENERATE, and share the key privately, in person, never over chirp.
+            Enter it on both devices before sending: frames heard without the key are lost, and have to be sent again.
           </li>
           <li>
-            For messages that should stay private even if the key leaks later, turn on TWO-WAY on both devices. Both need a
-            working speaker and microphone, and the first send waits for the other device to answer.
+            To keep messages private even if the key leaks later, turn on TWO-WAY on both devices. It works between a pair of
+            devices, not a group. Both need a working speaker and microphone, and the first send waits for the other to answer.
           </li>
         </ul>
       ),
     },
   ];
 
-  /** A block as the article shows it; slides reuse the same markup. */
-  const render = (b: Block, id?: string) =>
-    b.id === 'top' ? (
-      b.body
-    ) : b.kind === 'fix' ? (
-      <Fix id={id} title={b.title}>
+  /**
+   * A block as the article shows it. Slides reuse the same markup, adding the
+   * takeaway under the heading; their CSS hides the prose it stands in for.
+   */
+  const render = (b: Block, id?: string, slide = false) => {
+    if (b.id === 'top') return b.body;
+    const body = (
+      <>
+        {slide && b.takeaway && (typeof b.takeaway === 'string' ? <p className="ex-takeaway">{b.takeaway}</p> : <div className="ex-takeaway">{b.takeaway}</div>)}
         {b.body}
+      </>
+    );
+    return b.kind === 'fix' ? (
+      <Fix id={id} title={b.title}>
+        {body}
       </Fix>
     ) : b.kind === 'detail' ? (
       <section className="ex-fix ex-detail" id={id}>
         <h4>{b.title}</h4>
-        {b.body}
+        {body}
       </section>
     ) : (
       <section id={id}>
         <h3>{b.title}</h3>
-        {b.body}
+        {body}
       </section>
     );
+  };
 
   const slides: Slide[] = blocks.map((b) => ({
     id: b.id,
@@ -635,10 +632,10 @@ export default function Explainer() {
     content: b.kicker ? (
       <>
         <p className="ex-kicker">{b.kicker}</p>
-        {render(b)}
+        {render(b, undefined, true)}
       </>
     ) : (
-      render(b)
+      render(b, undefined, true)
     ),
   }));
 

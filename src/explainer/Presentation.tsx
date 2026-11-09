@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { SlideZoom } from './hooks';
+import { SlideSteps, SlideZoom, type SlideStepper } from './hooks';
 import { stopSound } from './sound';
 
 export interface Slide {
@@ -41,8 +41,22 @@ export default function Presentation({
   /** Upper bound for this slide, lowered when a zoom that should fit doesn't. */
   const cap = useRef(MAX_ZOOM);
   const floor = useRef(1);
+  /** The current slide's stepping figure, registered by useStepper. */
+  const steps = useRef<SlideStepper | null>(null);
   const last = slides.length - 1;
   const go = (n: number) => onIndex(Math.max(0, Math.min(last, n)));
+  // The keys (and a clicker, which sends them) reveal a figure's next step before
+  // moving on; the bar's arrows always change slide.
+  const forward = () => {
+    const s = steps.current;
+    if (s && s.step < s.count - 1) s.go(s.step + 1);
+    else go(index + 1);
+  };
+  const back = () => {
+    const s = steps.current;
+    if (s && s.step > 0) s.go(s.step - 1);
+    else go(index - 1);
+  };
 
   // The article behind keeps still and drops its scrollbar. Before the fit
   // below, so the fit measures the window without that scrollbar.
@@ -117,8 +131,8 @@ export default function Presentation({
       }
       // Sliders and text fields keep their own arrow keys.
       if ((e.target as HTMLElement).closest?.('input, textarea, select')) return;
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') go(index + 1);
-      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(index - 1);
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') forward();
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') back();
       else if (e.key === 'Home') go(0);
       else if (e.key === 'End') go(last);
       else return;
@@ -135,7 +149,9 @@ export default function Presentation({
     <div className="ex-present" ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="How chirp works, presentation">
       <div className="ex-present-view" ref={viewRef}>
         <div className="explainer ex-slide" ref={slideRef} style={{ zoom, width: SLIDE_WIDTH }} key={slide.id}>
-          <SlideZoom.Provider value={zoom}>{slide.content}</SlideZoom.Provider>
+          <SlideSteps.Provider value={steps}>
+            <SlideZoom.Provider value={zoom}>{slide.content}</SlideZoom.Provider>
+          </SlideSteps.Provider>
         </div>
       </div>
       <nav className="ex-present-bar" aria-label="Slides">
